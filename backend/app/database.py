@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -8,6 +9,30 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.config import get_settings
+
+
+STOP_WORDS = {
+    "about",
+    "after",
+    "also",
+    "are",
+    "can",
+    "does",
+    "explain",
+    "from",
+    "have",
+    "into",
+    "is",
+    "tell",
+    "that",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "with",
+    "your",
+}
 
 
 def utc_now() -> str:
@@ -158,3 +183,41 @@ def list_chunks(document_id: str | None = None) -> list[dict[str, Any]]:
             item["metadata"] = json.loads(item.pop("metadata_json"))
             output.append(item)
         return output
+
+
+def search_chunks_by_keyword(
+    query: str,
+    *,
+    document_ids: list[str] | None = None,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    terms = [
+        term
+        for term in re.findall(r"[a-z0-9][a-z0-9+#.-]*", query.lower())
+        if len(term) > 1 and term not in STOP_WORDS
+    ]
+    phrase = query.strip().lower()
+    if not terms and not phrase:
+        return []
+
+    allowed_ids = {document_id for document_id in (document_ids or []) if document_id}
+    chunks = list_chunks()
+    scored_chunks: list[dict[str, Any]] = []
+
+    for chunk in chunks:
+        if allowed_ids and chunk["document_id"] not in allowed_ids:
+            continue
+        text = chunk["text"].lower()
+        score = 0
+        if phrase and phrase in text:
+            score += 12 + text.count(phrase) * 4
+        for term in terms:
+            term_count = text.count(term)
+            if term_count:
+                score += term_count * (3 if len(term) > 4 else 1)
+        if score:
+            item = dict(chunk)
+            item["keyword_score"] = score
+            scored_chunks.append(item)
+
+    return sorted(scored_chunks, key=lambda item: item["keyword_score"], reverse=True)[:limit]

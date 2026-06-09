@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from langchain_core.documents import Document
 
 from app import database
 from app.config import get_settings
@@ -11,6 +13,29 @@ from app.prompts import GENERAL_QA_PROMPT, STUDY_MODE_PROMPT
 from app.services.groq_client import GroqClient
 from app.services.pdf_loader import extract_pdf_pages
 from app.services.vector_store import build_chunks_from_pages, rebuild_vector_store, similarity_search
+
+
+DISTINCTIVE_STOP_WORDS = {
+    "about",
+    "after",
+    "also",
+    "are",
+    "can",
+    "does",
+    "explain",
+    "from",
+    "have",
+    "into",
+    "that",
+    "tell",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "with",
+    "your",
+}
 
 
 def source_from_metadata(metadata: dict, score: float | None = None) -> SourceRef:
@@ -52,6 +77,58 @@ def format_context(results: list[tuple[object, float]]) -> tuple[str, list[Sourc
     return "\n\n---\n\n".join(parts), dedupe_sources(sources)
 
 
+def keyword_chunks_to_results(chunks: list[dict]) -> list[tuple[Document, float]]:
+    return [
+        (
+            Document(
+                page_content=chunk["text"],
+                metadata={
+                    **chunk["metadata"],
+                    "chunk_id": chunk["id"],
+                    "document_id": chunk["document_id"],
+                    "page_number": chunk["page_number"],
+                },
+            ),
+            -float(chunk.get("keyword_score", 0)),
+        )
+        for chunk in chunks
+    ]
+
+
+def merge_results(
+    keyword_results: list[tuple[Document, float]],
+    semantic_results: list[tuple[Document, float]],
+    *,
+    limit: int,
+) -> list[tuple[Document, float]]:
+    seen: set[str] = set()
+    merged: list[tuple[Document, float]] = []
+    for doc, score in [*keyword_results, *semantic_results]:
+        chunk_id = str(doc.metadata.get("chunk_id", ""))
+        if chunk_id and chunk_id in seen:
+            continue
+        if chunk_id:
+            seen.add(chunk_id)
+        merged.append((doc, score))
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def has_distinctive_keyword_match(query: str, chunks: list[dict]) -> bool:
+    if not chunks:
+        return False
+    terms = [
+        term
+        for term in re.findall(r"[a-z0-9][a-z0-9+#.-]*", query.lower())
+        if len(term) >= 5 and term not in DISTINCTIVE_STOP_WORDS
+    ]
+    if not terms:
+        return False
+    top_text = chunks[0]["text"].lower()
+    return any(term in top_text for term in terms)
+
+
 def retrieve_context(
     query: str,
     *,
@@ -59,7 +136,17 @@ def retrieve_context(
     document_ids: list[str] | None = None,
 ) -> tuple[str, list[SourceRef]]:
     settings = get_settings()
-    results = similarity_search(query, k=k or settings.retrieval_k, document_ids=document_ids)
+    limit = k or settings.retrieval_k
+    keyword_chunks = database.search_chunks_by_keyword(query, document_ids=document_ids, limit=max(3, limit // 2))
+    keyword_results = keyword_chunks_to_results(keyword_chunks)
+    if has_distinctive_keyword_match(query, keyword_chunks):
+        return format_context(keyword_results[:limit])
+
+    try:
+        semantic_results = similarity_search(query, k=limit, document_ids=document_ids)
+    except Exception:
+        semantic_results = []
+    results = merge_results(keyword_results, semantic_results, limit=limit)
     return format_context(results)
 
 
