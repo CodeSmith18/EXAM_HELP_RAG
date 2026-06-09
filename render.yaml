@@ -1,15 +1,11 @@
 services:
   - type: web
-    name: examprep-rag-api
-    runtime: python
+    name: exam-help-rag
+    runtime: docker
     plan: free
-    rootDir: backend
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.11
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
@@ -26,25 +22,3 @@ services:
         value: "900"
       - key: CHUNK_OVERLAP
         value: "125"
-      - key: FRONTEND_ORIGIN
-        fromService:
-          type: web
-          name: examprep-rag-web
-          property: host
-
-  - type: web
-    name: examprep-rag-web
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: examprep-rag-api
-          property: host

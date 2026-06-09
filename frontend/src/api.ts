@@ -9,8 +9,8 @@ import {
   SubmitMcqResponse
 } from "./types";
 
-const rawApiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const API_BASE = rawApiBase.startsWith("http") ? rawApiBase : `https://${rawApiBase}`;
+const rawApiBase = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
+const API_BASE = rawApiBase ? (rawApiBase.startsWith("http") ? rawApiBase : `https://${rawApiBase}`) : "";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

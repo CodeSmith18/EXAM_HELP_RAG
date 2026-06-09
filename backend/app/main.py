@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app import database
-from app.config import get_settings
+from app.config import PROJECT_ROOT, get_settings
 from app.models import (
     AskQuestionRequest,
     AskQuestionResponse,
@@ -94,3 +97,26 @@ async def study_mode(request: StudyModeRequest) -> StudyModeResponse:
 async def ask_question(request: AskQuestionRequest) -> AskQuestionResponse:
     answer, sources = await rag.ask_question(request.question, request.top_k, request.document_ids)
     return AskQuestionResponse(answer=answer, sources=sources)
+
+
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_frontend(full_path: str) -> FileResponse:
+    if not FRONTEND_DIST.exists():
+        raise HTTPException(status_code=404, detail="Frontend build not found. Run npm run build in frontend/.")
+
+    requested_path = (FRONTEND_DIST / full_path).resolve()
+    try:
+        requested_path.relative_to(FRONTEND_DIST.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="File not found.") from exc
+
+    if requested_path.is_file():
+        return FileResponse(requested_path)
+
+    index_path = FRONTEND_DIST / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Frontend index.html not found.")
