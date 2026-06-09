@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from app.config import get_settings
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@contextmanager
+def get_connection():
+    db_path = get_settings().database_path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                file_name TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL,
+                page_count INTEGER NOT NULL DEFAULT 0,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'uploaded',
+                error TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chunks (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)")
+
+
+def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    return dict(row) if row else None
+
+
+def create_document(document_id: str, file_name: str, stored_path: Path) -> dict[str, Any]:
+    uploaded_at = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO documents (id, file_name, stored_path, uploaded_at, status)
+            VALUES (?, ?, ?, ?, 'uploaded')
+            """,
+            (document_id, file_name, str(stored_path), uploaded_at),
+        )
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        return row_to_dict(row) or {}
+
+
+def update_document(
+    document_id: str,
+    *,
+    page_count: int | None = None,
+    chunk_count: int | None = None,
+    status: str | None = None,
+    error: str | None = None,
+) -> None:
+    updates: list[str] = []
+    values: list[Any] = []
+    if page_count is not None:
+        updates.append("page_count = ?")
+        values.append(page_count)
+    if chunk_count is not None:
+        updates.append("chunk_count = ?")
+        values.append(chunk_count)
+    if status is not None:
+        updates.append("status = ?")
+        values.append(status)
+    if error is not None:
+        updates.append("error = ?")
+        values.append(error)
+    if not updates:
+        return
+    values.append(document_id)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE documents SET {', '.join(updates)} WHERE id = ?", values)
+
+
+def list_documents() -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_document(document_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        return row_to_dict(row)
+
+
+def replace_chunks(document_id: str, chunks: Iterable[dict[str, Any]]) -> None:
+    now = utc_now()
+    with get_connection() as conn:
+        conn.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+        conn.executemany(
+            """
+            INSERT INTO chunks (id, document_id, chunk_index, page_number, text, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    chunk["id"],
+                    document_id,
+                    chunk["chunk_index"],
+                    chunk["page_number"],
+                    chunk["text"],
+                    json.dumps(chunk["metadata"]),
+                    now,
+                )
+                for chunk in chunks
+            ],
+        )
+
+
+def list_chunks(document_id: str | None = None) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        if document_id:
+            rows = conn.execute(
+                "SELECT * FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
+                (document_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM chunks ORDER BY created_at ASC").fetchall()
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            output.append(item)
+        return output
