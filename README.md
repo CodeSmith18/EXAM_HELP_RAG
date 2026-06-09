@@ -4,6 +4,10 @@ A full-stack MVP for exam preparation from uploaded PDF notes. Students can uplo
 
 This project uses free or open-source friendly tools and does not use paid OpenAI APIs.
 
+## Preview
+
+![ExamPrep RAG upload screen](docs/screenshots/examprep-rag-upload.jpg)
+
 ## Tech Stack
 
 - Frontend: React, Vite, TypeScript, Tailwind CSS
