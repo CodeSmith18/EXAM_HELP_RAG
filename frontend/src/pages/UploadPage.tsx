@@ -1,13 +1,21 @@
 import { ChangeEvent, useState } from "react";
 import { AlertCircle, CheckCircle2, Loader2, UploadCloud } from "lucide-react";
-import { uploadPdfs } from "../api";
+import { listDocuments, uploadPdfs } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { DocumentOut } from "../types";
+
+const POLL_DELAY_MS = 2000;
+const MAX_POLL_ATTEMPTS = 90;
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 export function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [ingesting, setIngesting] = useState(false);
   const [uploaded, setUploaded] = useState<DocumentOut[]>([]);
   const [error, setError] = useState("");
 
@@ -16,6 +24,35 @@ export function UploadPage() {
     setUploaded([]);
     setError("");
     setProgress(0);
+    setIngesting(false);
+  }
+
+  async function pollIngestion(documentIds: string[]) {
+    setIngesting(true);
+    try {
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+        const documents = await listDocuments();
+        const selectedDocuments = documentIds
+          .map((documentId) => documents.find((document) => document.id === documentId))
+          .filter((document): document is DocumentOut => Boolean(document));
+
+        if (selectedDocuments.length) {
+          setUploaded(selectedDocuments);
+        }
+
+        const finished =
+          selectedDocuments.length === documentIds.length &&
+          selectedDocuments.every((document) => document.status === "ready" || document.status === "failed");
+
+        if (finished) {
+          break;
+        }
+
+        await wait(POLL_DELAY_MS);
+      }
+    } finally {
+      setIngesting(false);
+    }
   }
 
   async function handleUpload() {
@@ -29,6 +66,7 @@ export function UploadPage() {
       const docs = await uploadPdfs(files, setProgress);
       setUploaded(docs);
       setProgress(100);
+      await pollIngestion(docs.map((doc) => doc.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -73,9 +111,9 @@ export function UploadPage() {
           </div>
         ) : null}
 
-        <button className="btn-primary mt-5 w-full" disabled={!files.length || uploading} onClick={handleUpload}>
+        <button className="btn-primary mt-5 w-full" disabled={!files.length || uploading || ingesting} onClick={handleUpload}>
           {uploading ? <Loader2 size={17} className="animate-spin" aria-hidden="true" /> : <UploadCloud size={17} aria-hidden="true" />}
-          Upload and Ingest
+          {ingesting ? "Embedding PDF" : "Upload and Ingest"}
         </button>
 
         {error ? (
@@ -103,10 +141,17 @@ export function UploadPage() {
                 </div>
               </div>
             ))}
-            <p className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
-              <CheckCircle2 size={16} aria-hidden="true" />
-              Vector store updated
-            </p>
+            {ingesting ? (
+              <p className="flex items-center gap-2 text-sm font-semibold text-indigo">
+                <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                Extracting text and creating embeddings
+              </p>
+            ) : uploaded.every((doc) => doc.status === "ready") ? (
+              <p className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
+                <CheckCircle2 size={16} aria-hidden="true" />
+                Vector store updated
+              </p>
+            ) : null}
           </div>
         ) : (
           <p className="mt-5 text-sm text-slate-500">Uploaded PDFs appear here after ingestion.</p>

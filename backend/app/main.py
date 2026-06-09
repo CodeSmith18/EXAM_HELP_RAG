@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -50,12 +50,14 @@ def health() -> dict[str, str]:
 
 
 @app.post("/upload-pdf", response_model=UploadResponse)
-async def upload_pdf(files: list[UploadFile] = File(...)) -> UploadResponse:
+async def upload_pdf(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)) -> UploadResponse:
     documents: list[DocumentOut] = []
     for file in files:
         document_id, _ = await rag.save_upload(file)
-        ingested = rag.ingest_document(document_id)
-        documents.append(DocumentOut(**ingested))
+        document = database.get_document(document_id)
+        if document:
+            documents.append(DocumentOut(**document))
+        background_tasks.add_task(rag.ingest_document, document_id)
     return UploadResponse(documents=documents)
 
 
