@@ -6,7 +6,13 @@ This project uses free or open-source friendly tools and does not use paid OpenA
 
 ## Preview
 
-![ExamPrep RAG upload screen](docs/screenshots/examprep-rag-upload.jpg)
+| Dashboard | Upload |
+| --- | --- |
+| ![ExamPrep RAG dashboard](docs/screenshots/examprep-rag-dashboard.png) | ![ExamPrep RAG upload screen](docs/screenshots/examprep-rag-upload.png) |
+| Documents | Tests |
+| ![ExamPrep RAG documents screen](docs/screenshots/examprep-rag-documents.png) | ![ExamPrep RAG tests screen](docs/screenshots/examprep-rag-tests.png) |
+| Study |  |
+| ![ExamPrep RAG study screen](docs/screenshots/examprep-rag-study.png) |  |
 
 ## Tech Stack
 
