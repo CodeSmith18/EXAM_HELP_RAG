@@ -1,4 +1,44 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: exam-help-rag:local
+    container_name: examprep-rag-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      DATABASE_URL: postgresql://examprep:examprep_dev_password@postgres:5432/examprep
+      VECTOR_DB_PATH: /data/vector_store
+      UPLOAD_DIR: /data/uploads
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      CHUNK_SIZE: ${CHUNK_SIZE:-900}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-125}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+      MAX_UPLOAD_FILES: ${MAX_UPLOAD_FILES:-5}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-change-this-local-dev-secret}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-10080}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8000}
+      PORT: 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   postgres:
     image: postgres:16-alpine
     container_name: examprep-rag-postgres
@@ -18,4 +58,5 @@ services:
       retries: 5
 
 volumes:
+  app_data:
   postgres_data:
