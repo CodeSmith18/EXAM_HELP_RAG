@@ -1,42 +1,217 @@
-# ExamPrep RAG: AI-Powered PDF Study Assistant
+# ExamHelp RAG
 
-A full-stack MVP for exam preparation from uploaded PDF notes. Students can upload PDFs, ingest them into a local vector store, generate MCQ or written tests, submit answers, get scores and feedback, and use study mode for simple explanations with optional Mermaid diagrams.
+AI-powered PDF study assistant for generating tests, revision notes, written-answer feedback, and source-grounded Q&A from uploaded study material.
 
-This project uses free or open-source friendly tools and does not use paid OpenAI APIs.
+![React](https://img.shields.io/badge/Frontend-React%20%2B%20TypeScript-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![RAG](https://img.shields.io/badge/AI-RAG%20%2B%20FAISS-6C63FF?style=for-the-badge)
+![Groq](https://img.shields.io/badge/LLM-Groq%20API-F55036?style=for-the-badge)
+
+## Overview
+
+ExamHelp RAG is a full-stack RAG application that converts uploaded PDFs into an interactive exam-preparation workspace. Students can upload notes, generate MCQ or written tests, get scores and feedback, ask questions from selected documents, and create study notes grounded in their own PDF content.
+
+The project focuses on practical backend and AI engineering:
+
+- PDF ingestion, parsing, chunking, embedding, and vector search.
+- Source-aware retrieval using FAISS and document-level filters.
+- Structured LLM workflows for MCQs, written evaluation, study notes, and Q&A.
+- Full-stack user flow with React, FastAPI, SQLite, and local vector persistence.
 
 ## Preview
 
 | Dashboard | Upload |
 | --- | --- |
-| ![ExamPrep RAG dashboard](docs/screenshots/examprep-rag-dashboard.png) | ![ExamPrep RAG upload screen](docs/screenshots/examprep-rag-upload.png) |
+| ![ExamHelp RAG dashboard](docs/screenshots/examprep-rag-dashboard.png) | ![ExamHelp RAG upload screen](docs/screenshots/examprep-rag-upload.png) |
+
 | Documents | Tests |
-| ![ExamPrep RAG documents screen](docs/screenshots/examprep-rag-documents.png) | ![ExamPrep RAG tests screen](docs/screenshots/examprep-rag-tests.png) |
-| Study |  |
-| ![ExamPrep RAG study screen](docs/screenshots/examprep-rag-study.png) |  |
+| --- | --- |
+| ![ExamHelp RAG documents screen](docs/screenshots/examprep-rag-documents.png) | ![ExamHelp RAG tests screen](docs/screenshots/examprep-rag-tests.png) |
+
+| Study Mode |
+| --- |
+| ![ExamHelp RAG study screen](docs/screenshots/examprep-rag-study.png) |
+
+## Key Features
+
+- Upload and manage text-based PDF study material.
+- Parse PDFs into page-linked chunks for traceable retrieval.
+- Generate MCQ, written, or mixed tests from selected documents.
+- Evaluate MCQ answers deterministically in the backend.
+- Evaluate written answers with rubric-based LLM feedback.
+- Ask document-grounded questions using FAISS top-k retrieval.
+- Generate exam-focused study notes from uploaded PDFs.
+- Render Mermaid diagrams for flow-based study topics.
+- Persist document metadata in SQLite and vector indexes in FAISS.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[PDF Upload] --> B[PyMuPDF Text Extraction]
+    B --> C[Chunking with Overlap]
+    C --> D[Sentence Transformer Embeddings]
+    D --> E[FAISS Vector Store]
+    C --> F[SQLite Metadata]
+    G[User Query or Test Request] --> H[Filtered Retrieval]
+    E --> H
+    F --> H
+    H --> I[Prompt Templates]
+    I --> J[Groq LLM]
+    J --> K[Tests, Notes, Feedback, Q&A]
+```
 
 ## Tech Stack
 
-- Frontend: React, Vite, TypeScript, Tailwind CSS
-- Backend: Python FastAPI
-- LLM: Groq API free tier
-- RAG: LangChain text splitting and retrieval flow
-- PDF parsing: PyMuPDF
-- Embeddings: HuggingFace `sentence-transformers/all-MiniLM-L6-v2`
-- Vector database: FAISS persisted locally
-- App database: SQLite
-- Diagrams: Mermaid.js
+| Area | Tools |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, Tailwind CSS, Mermaid.js |
+| Backend | FastAPI, Python, Pydantic Settings |
+| AI / RAG | LangChain, FAISS, HuggingFace sentence-transformers, Groq API |
+| Database | SQLite, local FAISS persistence |
+| PDF Processing | PyMuPDF |
+| Deployment | Docker, Render Blueprint |
 
-## Folder Structure
+## Backend API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/upload-pdf` | Upload a PDF document |
+| `GET` | `/documents` | List uploaded documents |
+| `POST` | `/ingest-document` | Parse, chunk, embed, and index a document |
+| `POST` | `/generate-test` | Generate MCQ, written, or mixed tests |
+| `POST` | `/submit-mcq-test` | Score MCQ answers |
+| `POST` | `/evaluate-written-test` | Evaluate written answers |
+| `POST` | `/study-mode` | Generate study notes |
+| `POST` | `/ask-question` | Ask questions from selected PDFs |
+| `GET` | `/health` | Health check |
+
+## Getting Started
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/CodeSmith18/EXAM_HELP_RAG.git
+cd EXAM_HELP_RAG
+cp .env.example .env
+```
+
+Update `.env` with your Groq API key:
+
+```bash
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.1-8b-instant
+AUTH_SECRET_KEY=replace-with-a-long-random-secret
+```
+
+### 2. Run with Docker
+
+Docker is the easiest way to start the full project. It runs:
+
+- FastAPI backend
+- Built React frontend
+- Postgres database
+- Persistent volumes for uploads, FAISS vectors, model cache, and database data
+
+Start everything:
+
+```bash
+docker compose up --build
+```
+
+Open the app:
+
+```text
+http://localhost:8000
+```
+
+API docs:
+
+```text
+http://localhost:8000/docs
+```
+
+Stop containers:
+
+```bash
+docker compose down
+```
+
+Remove containers and local Docker volumes:
+
+```bash
+docker compose down -v
+```
+
+See `DOCKER.md` for a shorter Docker-only guide.
+
+### 3. Run without Docker
+
+Run the backend:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+uvicorn app.main:app --reload --app-dir backend
+```
+
+Backend URL:
+
+```text
+http://localhost:8000
+```
+
+API docs:
+
+```text
+http://localhost:8000/docs
+```
+
+Run the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend URL:
+
+```text
+http://localhost:5173
+```
+
+## Environment Variables
+
+```bash
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.1-8b-instant
+VECTOR_DB_PATH=backend/data/vector_store
+DATABASE_URL=sqlite:///backend/data/examprep.sqlite3
+UPLOAD_DIR=backend/data/uploads
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+CHUNK_SIZE=900
+CHUNK_OVERLAP=125
+MAX_UPLOAD_MB=25
+MAX_UPLOAD_FILES=5
+AUTH_SECRET_KEY=replace-with-a-long-random-secret
+ACCESS_TOKEN_MINUTES=10080
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+For Docker Compose, the app service uses Postgres automatically:
+
+```bash
+DATABASE_URL=postgresql://examprep:examprep_dev_password@postgres:5432/examprep
+```
+
+## Project Structure
 
 ```text
 .
-|-- .env.example
-|-- README.md
 |-- backend
-|   |-- requirements.txt
 |   |-- app
-|   |   |-- config.py
-|   |   |-- database.py
 |   |   |-- main.py
 |   |   |-- models.py
 |   |   |-- prompts.py
@@ -46,154 +221,59 @@ This project uses free or open-source friendly tools and does not use paid OpenA
 |   |       |-- rag.py
 |   |       |-- test_service.py
 |   |       `-- vector_store.py
-|   `-- data
-|       |-- uploads
-|       `-- vector_store
-`-- frontend
-    |-- package.json
-    |-- tailwind.config.js
-    `-- src
-        |-- api.ts
-        |-- App.tsx
-        |-- components
-        `-- pages
+|   |-- data
+|   `-- requirements.txt
+|-- frontend
+|   |-- src
+|   |   |-- components
+|   |   |-- pages
+|   |   |-- api.ts
+|   |   `-- App.tsx
+|   `-- package.json
+|-- docs
+|   `-- screenshots
+|-- DOCKER.md
+|-- Dockerfile
+|-- docker-compose.yml
+|-- render.yaml
+`-- README.md
 ```
-
-## Setup
-
-1. Create the environment file:
-
-```bash
-cp .env.example .env
-```
-
-2. Add your Groq key:
-
-```bash
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=llama-3.1-8b-instant
-```
-
-You can switch `GROQ_MODEL` to another Groq-supported free-tier model if your account exposes it.
-
-## Run Backend
-
-From the project root:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-uvicorn app.main:app --reload --app-dir backend
-```
-
-The API runs at:
-
-```text
-http://localhost:8000
-```
-
-Useful API docs:
-
-```text
-http://localhost:8000/docs
-```
-
-## Run Frontend
-
-In a second terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The app runs at:
-
-```text
-http://localhost:5173
-```
-
-## Backend Endpoints
-
-- `POST /upload-pdf`
-- `GET /documents`
-- `POST /ingest-document`
-- `POST /generate-test`
-- `POST /submit-mcq-test`
-- `POST /evaluate-written-test`
-- `POST /study-mode`
-- `POST /ask-question`
-- `GET /health`
-
-## Sample PDF Testing
-
-1. Start the backend and frontend.
-2. Open `http://localhost:5173`.
-3. Go to Upload and select one or more small text-based PDFs.
-4. Wait for ingestion to finish. The backend extracts page text, chunks it, embeds chunks, stores metadata in SQLite, and persists the FAISS index.
-5. Go to Generate Test.
-6. Choose all ready PDFs or select specific PDFs, then choose MCQ, written, or mixed mode, set question count and difficulty, then generate.
-7. Submit answers on Take Test and review scores on Results.
-8. Use Study Mode with all ready PDFs or selected PDFs. If the topic has a flow or relationship, the app can render a Mermaid diagram.
-
-Scanned image-only PDFs need OCR before upload because this MVP extracts selectable PDF text.
 
 ## RAG Pipeline
 
-1. PDF upload saves the file under `backend/data/uploads`.
-2. PyMuPDF extracts text page by page.
-3. Text is cleaned and split with LangChain `RecursiveCharacterTextSplitter`.
-4. Chunks use about 900 characters with 125 characters of overlap.
+1. The user uploads one or more PDF files.
+2. The backend stores uploaded files under `backend/data/uploads`.
+3. PyMuPDF extracts selectable text page by page.
+4. LangChain splits text into chunks of about 900 characters with 125 characters of overlap.
 5. HuggingFace sentence-transformer embeddings are generated locally.
-6. FAISS stores vectors in `backend/data/vector_store`.
-7. SQLite stores document metadata, page numbers, chunk ids, and chunk text.
-8. Retrieval uses semantic similarity over FAISS and returns source metadata.
-9. Prompt templates in `backend/app/prompts.py` force the model to use only retrieved PDF context.
-10. Groq returns structured JSON for tests, evaluation, study mode, and Q&A.
+6. FAISS stores vectors under `backend/data/vector_store`.
+7. SQLite stores document metadata, chunk text, page numbers, and chunk ids.
+8. User requests retrieve the most relevant chunks with optional document-level filtering.
+9. Prompt templates instruct the LLM to answer only from retrieved context.
+10. Groq returns structured output for tests, evaluations, notes, and Q&A.
 
-## Interview Explanation
+## What This Project Demonstrates
 
-This app demonstrates a complete source-aware RAG workflow:
+- End-to-end RAG application design.
+- Backend API design with FastAPI.
+- Vector search and metadata-filtered retrieval.
+- LLM prompt design for structured JSON responses.
+- PDF processing and text chunking strategy.
+- Local persistence using SQLite and FAISS.
+- Full-stack product flow from upload to AI-generated output.
 
-- PDF ingestion turns unstructured notes into page-linked chunks.
-- Embeddings convert chunks into semantic vectors.
-- FAISS enables fast top-k retrieval for a question or topic.
-- Retrieved context is sent to Groq with strict prompts.
-- MCQs are scored deterministically in the backend.
-- Test generation can be filtered to one or more selected PDFs using chunk metadata.
-- Study Mode and PDF Q&A can be filtered to one or more selected PDFs using the same retrieval filter.
-- Written answers are evaluated with a rubric for correctness, completeness, and clarity.
-- Study mode turns retrieved context into exam-friendly revision notes and diagrams.
+## Limitations
 
-The system is intentionally simple: local SQLite and local FAISS make the MVP easy to explain, run, and extend.
+- Scanned image-only PDFs require OCR before upload.
+- Local FAISS and SQLite are optimized for demos and MVP usage.
+- For multi-user production deployment, move the database to Postgres and use a hosted vector database such as Qdrant, ChromaDB, or Pinecone.
 
-## Free Deployment Suggestions
+## Deployment
 
-- Frontend: Vercel, Netlify, or Cloudflare Pages.
-- Backend: Render free tier, Fly.io, Railway hobby/free credits, or a small VM.
-- Database: SQLite for demos; move to Postgres if deploying for multiple users.
-- Vector store: local FAISS for MVP; ChromaDB, Qdrant, or hosted vector storage for larger deployments.
-- Models: Groq free tier for LLM calls and local HuggingFace embeddings.
+This repo includes `render.yaml` for Render Blueprint deployment. See `RENDER_DEPLOYMENT.md` for the full deployment steps.
 
-## Render Deployment
-
-This repo includes `render.yaml` for Render Blueprint deployment. See `RENDER_DEPLOYMENT.md` for step-by-step setup.
-
-For deployment, set these environment variables on the backend host:
-
-```bash
-GROQ_API_KEY=...
-GROQ_MODEL=llama-3.1-8b-instant
-VECTOR_DB_PATH=backend/data/vector_store
-DATABASE_URL=sqlite:///backend/data/examprep.sqlite3
-UPLOAD_DIR=backend/data/uploads
-```
-
-Set this on the frontend host:
+For deployment, configure backend environment variables on the hosting platform and set the frontend API URL:
 
 ```bash
 VITE_API_BASE_URL=https://your-backend-url
 ```
-# EXAM_HELP_RAG
