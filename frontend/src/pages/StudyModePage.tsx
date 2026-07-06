@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { BookOpen, Loader2, MessageSquareText, RefreshCw, Search } from "lucide-react";
-import { askQuestion, listDocuments, studyMode } from "../api";
+import { BookOpen, History, Loader2, MessageSquareText, RefreshCw, Search } from "lucide-react";
+import { askQuestion, listDocuments, listStudySessions, studyMode } from "../api";
 import { MermaidBlock } from "../components/MermaidBlock";
 import { SourceList } from "../components/SourceList";
-import { AskQuestionResponse, DocumentOut, StudyModeResponse } from "../types";
+import { AskQuestionResponse, DocumentOut, StudyModeResponse, StudySessionOut } from "../types";
 
 type StudyTab = "study" | "ask";
 
@@ -16,6 +16,7 @@ export function StudyModePage() {
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [study, setStudy] = useState<StudyModeResponse | null>(null);
+  const [studySessions, setStudySessions] = useState<StudySessionOut[]>([]);
   const [answer, setAnswer] = useState<AskQuestionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -34,8 +35,17 @@ export function StudyModePage() {
     }
   }
 
+  async function loadStudySessions() {
+    try {
+      setStudySessions(await listStudySessions());
+    } catch {
+      setStudySessions([]);
+    }
+  }
+
   useEffect(() => {
     loadDocuments();
+    loadStudySessions();
   }, []);
 
   function toggleDocument(documentId: string) {
@@ -53,7 +63,9 @@ export function StudyModePage() {
     setError("");
     setStudy(null);
     try {
-      setStudy(await studyMode(topic.trim(), includeDiagram, selectedDocumentIds));
+      const response = await studyMode(topic.trim(), includeDiagram, selectedDocumentIds);
+      setStudy(response);
+      await loadStudySessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create study notes.");
     } finally {
@@ -200,6 +212,31 @@ export function StudyModePage() {
         )}
 
         {error ? <p className="mt-4 text-sm font-medium text-red-600">{error}</p> : null}
+
+        {studySessions.length ? (
+          <div className="mt-5 border-t border-line pt-5">
+            <div className="mb-3 flex items-center gap-2">
+              <History size={17} className="text-slate-500" aria-hidden="true" />
+              <h3 className="text-sm font-bold text-ink">Saved Sessions</h3>
+            </div>
+            <div className="grid gap-2">
+              {studySessions.slice(0, 5).map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  className="rounded-lg border border-line bg-white px-3 py-2 text-left transition hover:bg-slate-50"
+                  onClick={() => {
+                    setStudy(session.response);
+                    setAnswer(null);
+                  }}
+                >
+                  <span className="block truncate text-sm font-bold text-ink">{session.topic}</span>
+                  <span className="block text-xs text-slate-500">{new Date(session.created_at).toLocaleString()}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="space-y-5">

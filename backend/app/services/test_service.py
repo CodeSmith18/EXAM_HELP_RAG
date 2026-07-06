@@ -90,9 +90,10 @@ def normalize_generated_questions(raw_questions: list[dict], sources: list[Sourc
     return [question for question in normalized if question.question]
 
 
-def serialize_test(response: GenerateTestResponse, document_ids: list[str]) -> None:
+def serialize_test(response: GenerateTestResponse, document_ids: list[str], owner_id: str | None = None) -> None:
     database.save_generated_test(
         test_id=response.test_id,
+        owner_id=owner_id,
         mode=response.mode,
         difficulty=response.difficulty,
         topic=response.topic,
@@ -125,12 +126,12 @@ def saved_test_to_history_item(saved: dict) -> TestHistoryItem:
     )
 
 
-def list_saved_tests(limit: int = 25) -> list[TestHistoryItem]:
-    return [saved_test_to_history_item(saved) for saved in database.list_generated_tests(limit=limit)]
+def list_saved_tests(limit: int = 25, owner_id: str | None = None) -> list[TestHistoryItem]:
+    return [saved_test_to_history_item(saved) for saved in database.list_generated_tests(limit=limit, owner_id=owner_id)]
 
 
-def get_saved_test(test_id: str) -> GenerateTestResponse:
-    saved = database.get_generated_test(test_id)
+def get_saved_test(test_id: str, owner_id: str | None = None) -> GenerateTestResponse:
+    saved = database.get_generated_test(test_id, owner_id=owner_id)
     if not saved:
         raise HTTPException(status_code=404, detail="Saved test not found.")
     return saved_test_to_response(saved)
@@ -148,8 +149,8 @@ def combined_percentage(mcq: SubmitMcqResponse | None, written: EvaluateWrittenR
     return round((earned / possible) * 100, 2) if possible else 0.0
 
 
-def saved_result_to_response(saved_result: dict) -> SavedTestResult:
-    test = get_saved_test(saved_result["test_id"])
+def saved_result_to_response(saved_result: dict, owner_id: str | None = None) -> SavedTestResult:
+    test = get_saved_test(saved_result["test_id"], owner_id=owner_id)
     return SavedTestResult(
         result_id=saved_result["id"],
         test=test,
@@ -160,23 +161,30 @@ def saved_result_to_response(saved_result: dict) -> SavedTestResult:
     )
 
 
-def save_test_result(request: SaveTestResultRequest) -> SavedTestResult:
-    if not database.get_generated_test(request.test.test_id):
-        serialize_test(request.test, [])
+def save_test_result(request: SaveTestResultRequest, owner_id: str | None = None) -> SavedTestResult:
+    existing_test = database.get_generated_test(request.test.test_id)
+    if owner_id and existing_test and existing_test.get("owner_id") != owner_id:
+        raise HTTPException(status_code=404, detail="Saved test not found.")
+    if not database.get_generated_test(request.test.test_id, owner_id=owner_id):
+        serialize_test(request.test, [], owner_id=owner_id)
     saved = database.create_test_result(
         test_id=request.test.test_id,
+        owner_id=owner_id,
         mcq=request.mcq.model_dump(mode="json") if request.mcq else None,
         written=request.written.model_dump(mode="json") if request.written else None,
         percentage=combined_percentage(request.mcq, request.written),
     )
-    return saved_result_to_response(saved)
+    return saved_result_to_response(saved, owner_id=owner_id)
 
 
-def list_saved_results(limit: int = 25) -> list[SavedTestResult]:
-    return [saved_result_to_response(saved) for saved in database.list_test_results(limit=limit)]
+def list_saved_results(limit: int = 25, owner_id: str | None = None) -> list[SavedTestResult]:
+    return [
+        saved_result_to_response(saved, owner_id=owner_id)
+        for saved in database.list_test_results(limit=limit, owner_id=owner_id)
+    ]
 
 
-async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
+async def generate_test(request: GenerateTestRequest, owner_id: str | None = None) -> GenerateTestResponse:
     query = " ".join(
         [
             request.topic or "important exam concepts",
@@ -185,7 +193,7 @@ async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
             "questions",
         ]
     )
-    context, sources = retrieve_context(query, document_ids=request.document_ids)
+    context, sources = retrieve_context(query, document_ids=request.document_ids, owner_id=owner_id)
     if not context:
         return GenerateTestResponse(
             test_id=str(uuid.uuid4()),
@@ -210,7 +218,7 @@ async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
         sources=sources,
     )
     if questions:
-        serialize_test(response, request.document_ids)
+        serialize_test(response, request.document_ids, owner_id=owner_id)
     return response
 
 
@@ -243,7 +251,7 @@ def score_mcq_test(request: SubmitMcqRequest) -> SubmitMcqResponse:
     return SubmitMcqResponse(score=score, total=total, percentage=percentage, results=results)
 
 
-async def evaluate_written_test(request: EvaluateWrittenRequest) -> EvaluateWrittenResponse:
+async def evaluate_written_test(request: EvaluateWrittenRequest, owner_id: str | None = None) -> EvaluateWrittenResponse:
     answers = {answer.question_id: answer.answer for answer in request.answers}
     results: list[WrittenEvaluationItem] = []
 
@@ -252,7 +260,7 @@ async def evaluate_written_test(request: EvaluateWrittenRequest) -> EvaluateWrit
             continue
         student_answer = answers.get(question.id, "")
         document_ids = [source.document_id for source in question.sources if source.document_id]
-        context, sources = retrieve_context(question.question, document_ids=document_ids)
+        context, sources = retrieve_context(question.question, document_ids=document_ids, owner_id=owner_id)
         if not context:
             results.append(
                 WrittenEvaluationItem(

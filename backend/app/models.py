@@ -2,11 +2,48 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 TestMode = Literal["mcq", "written", "mixed"]
 Difficulty = Literal["Easy", "Medium", "Hard"]
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    created_at: str
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+    full_name: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+            raise ValueError("Enter a valid email address.")
+        return normalized
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return AuthRegisterRequest.validate_email(value)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
 
 
 class DocumentOut(BaseModel):
@@ -198,6 +235,15 @@ class StudyModeResponse(BaseModel):
     quick_revision_summary: str
     mermaid_diagram: Optional[str] = None
     sources: list[SourceRef]
+
+
+class StudySessionOut(BaseModel):
+    id: str
+    topic: str
+    include_diagram: bool
+    document_ids: list[str]
+    response: StudyModeResponse
+    created_at: str
 
 
 class LLMStudyModePayload(BaseModel):

@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     retrieval_k: int = 6
     max_upload_mb: int = 25
     max_upload_files: int = 5
+    auth_secret_key: str = "change-this-local-dev-secret"
+    access_token_minutes: int = 60 * 24 * 7
     frontend_origin: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")

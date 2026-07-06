@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_upload_rejects_pdf_extension_with_invalid_signature(temp_app_settings) -> None:
+def test_upload_rejects_pdf_extension_with_invalid_signature(temp_app_settings, auth_headers) -> None:
     from fastapi.testclient import TestClient
 
     from app import database
@@ -10,6 +10,7 @@ def test_upload_rejects_pdf_extension_with_invalid_signature(temp_app_settings) 
     with TestClient(app) as client:
         response = client.post(
             "/upload-pdf",
+            headers=auth_headers,
             files=[("files", ("notes.pdf", b"this is not a pdf", "application/pdf"))],
         )
 
@@ -18,7 +19,7 @@ def test_upload_rejects_pdf_extension_with_invalid_signature(temp_app_settings) 
     assert database.list_documents() == []
 
 
-def test_upload_rejects_duplicate_file_names(temp_app_settings) -> None:
+def test_upload_rejects_duplicate_file_names(temp_app_settings, auth_headers) -> None:
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -27,6 +28,7 @@ def test_upload_rejects_duplicate_file_names(temp_app_settings) -> None:
     with TestClient(app) as client:
         response = client.post(
             "/upload-pdf",
+            headers=auth_headers,
             files=[
                 ("files", ("notes.pdf", pdf_bytes, "application/pdf")),
                 ("files", ("notes.pdf", pdf_bytes, "application/pdf")),

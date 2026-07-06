@@ -27,3 +27,16 @@ def temp_app_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     database.init_db()
     yield tmp_path
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def auth_headers(temp_app_settings: Path) -> dict[str, str]:
+    from app import database
+    from app.services.auth import create_access_token, hash_password
+
+    user = database.create_user(
+        email="student@example.com",
+        password_hash=hash_password("password123"),
+        full_name="Student",
+    )
+    return {"Authorization": f"Bearer {create_access_token(user)}"}

@@ -57,15 +57,29 @@ def init_db() -> None:
     with get_connection() as conn:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY,
+                owner_id TEXT,
                 file_name TEXT NOT NULL,
                 stored_path TEXT NOT NULL,
                 uploaded_at TEXT NOT NULL,
                 page_count INTEGER NOT NULL DEFAULT 0,
                 chunk_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'uploaded',
-                error TEXT
+                error TEXT,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -88,13 +102,15 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS generated_tests (
                 id TEXT PRIMARY KEY,
+                owner_id TEXT,
                 mode TEXT NOT NULL,
                 difficulty TEXT NOT NULL,
                 topic TEXT,
                 document_ids_json TEXT NOT NULL,
                 questions_json TEXT NOT NULL,
                 sources_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -104,30 +120,86 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS test_results (
                 id TEXT PRIMARY KEY,
                 test_id TEXT NOT NULL,
+                owner_id TEXT,
                 submitted_at TEXT NOT NULL,
                 mcq_json TEXT,
                 written_json TEXT,
                 percentage REAL NOT NULL DEFAULT 0,
-                FOREIGN KEY (test_id) REFERENCES generated_tests(id) ON DELETE CASCADE
+                FOREIGN KEY (test_id) REFERENCES generated_tests(id) ON DELETE CASCADE,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_submitted_at ON test_results(submitted_at)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS study_sessions (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                include_diagram INTEGER NOT NULL,
+                document_ids_json TEXT NOT NULL,
+                response_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_study_sessions_owner_id ON study_sessions(owner_id)")
+        ensure_column(conn, "documents", "owner_id", "TEXT")
+        ensure_column(conn, "generated_tests", "owner_id", "TEXT")
+        ensure_column(conn, "test_results", "owner_id", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_owner_id ON documents(owner_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_tests_owner_id ON generated_tests(owner_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_owner_id ON test_results(owner_id)")
+
+
+def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in columns:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def create_document(document_id: str, file_name: str, stored_path: Path) -> dict[str, Any]:
+def create_user(*, email: str, password_hash: str, full_name: str | None = None) -> dict[str, Any]:
+    user_id = uuid.uuid4().hex
+    created_at = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (id, email, password_hash, full_name, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, email.strip().lower(), password_hash, full_name, created_at),
+        )
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row_to_dict(row) or {}
+
+
+def get_user(user_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row_to_dict(row)
+
+
+def get_user_by_email(email: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email.strip().lower(),)).fetchone()
+        return row_to_dict(row)
+
+
+def create_document(document_id: str, file_name: str, stored_path: Path, owner_id: str | None = None) -> dict[str, Any]:
     uploaded_at = utc_now()
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO documents (id, file_name, stored_path, uploaded_at, status)
-            VALUES (?, ?, ?, ?, 'uploaded')
+            INSERT INTO documents (id, owner_id, file_name, stored_path, uploaded_at, status)
+            VALUES (?, ?, ?, ?, ?, 'uploaded')
             """,
-            (document_id, file_name, str(stored_path), uploaded_at),
+            (document_id, owner_id, file_name, str(stored_path), uploaded_at),
         )
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         return row_to_dict(row) or {}
@@ -162,15 +234,27 @@ def update_document(
         conn.execute(f"UPDATE documents SET {', '.join(updates)} WHERE id = ?", values)
 
 
-def list_documents() -> list[dict[str, Any]]:
+def list_documents(owner_id: str | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
+        if owner_id:
+            rows = conn.execute(
+                "SELECT * FROM documents WHERE owner_id = ? ORDER BY uploaded_at DESC",
+                (owner_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM documents ORDER BY uploaded_at DESC").fetchall()
         return [dict(row) for row in rows]
 
 
-def get_document(document_id: str) -> dict[str, Any] | None:
+def get_document(document_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        if owner_id:
+            row = conn.execute(
+                "SELECT * FROM documents WHERE id = ? AND owner_id = ?",
+                (document_id, owner_id),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         return row_to_dict(row)
 
 
@@ -198,12 +282,32 @@ def replace_chunks(document_id: str, chunks: Iterable[dict[str, Any]]) -> None:
         )
 
 
-def list_chunks(document_id: str | None = None) -> list[dict[str, Any]]:
+def list_chunks(document_id: str | None = None, owner_id: str | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
-        if document_id:
+        if document_id and owner_id:
+            rows = conn.execute(
+                """
+                SELECT chunks.* FROM chunks
+                JOIN documents ON documents.id = chunks.document_id
+                WHERE chunks.document_id = ? AND documents.owner_id = ?
+                ORDER BY chunks.chunk_index ASC
+                """,
+                (document_id, owner_id),
+            ).fetchall()
+        elif document_id:
             rows = conn.execute(
                 "SELECT * FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
                 (document_id,),
+            ).fetchall()
+        elif owner_id:
+            rows = conn.execute(
+                """
+                SELECT chunks.* FROM chunks
+                JOIN documents ON documents.id = chunks.document_id
+                WHERE documents.owner_id = ?
+                ORDER BY chunks.created_at ASC
+                """,
+                (owner_id,),
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM chunks ORDER BY created_at ASC").fetchall()
@@ -219,6 +323,7 @@ def search_chunks_by_keyword(
     query: str,
     *,
     document_ids: list[str] | None = None,
+    owner_id: str | None = None,
     limit: int = 4,
 ) -> list[dict[str, Any]]:
     terms = [
@@ -231,7 +336,7 @@ def search_chunks_by_keyword(
         return []
 
     allowed_ids = {document_id for document_id in (document_ids or []) if document_id}
-    chunks = list_chunks()
+    chunks = list_chunks(owner_id=owner_id)
     scored_chunks: list[dict[str, Any]] = []
 
     for chunk in chunks:
@@ -256,6 +361,7 @@ def search_chunks_by_keyword(
 def save_generated_test(
     *,
     test_id: str,
+    owner_id: str | None,
     mode: str,
     difficulty: str,
     topic: str | None,
@@ -268,11 +374,12 @@ def save_generated_test(
         conn.execute(
             """
             INSERT OR REPLACE INTO generated_tests
-                (id, mode, difficulty, topic, document_ids_json, questions_json, sources_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, owner_id, mode, difficulty, topic, document_ids_json, questions_json, sources_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 test_id,
+                owner_id,
                 mode,
                 difficulty,
                 topic,
@@ -296,24 +403,37 @@ def generated_test_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None
     return item
 
 
-def get_generated_test(test_id: str) -> dict[str, Any] | None:
+def get_generated_test(test_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
     with get_connection() as conn:
-        row = conn.execute("SELECT * FROM generated_tests WHERE id = ?", (test_id,)).fetchone()
+        if owner_id:
+            row = conn.execute(
+                "SELECT * FROM generated_tests WHERE id = ? AND owner_id = ?",
+                (test_id, owner_id),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM generated_tests WHERE id = ?", (test_id,)).fetchone()
         return generated_test_row_to_dict(row)
 
 
-def list_generated_tests(limit: int = 25) -> list[dict[str, Any]]:
+def list_generated_tests(limit: int = 25, owner_id: str | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM generated_tests ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if owner_id:
+            rows = conn.execute(
+                "SELECT * FROM generated_tests WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM generated_tests ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [item for row in rows if (item := generated_test_row_to_dict(row))]
 
 
 def create_test_result(
     *,
     test_id: str,
+    owner_id: str | None,
     mcq: dict[str, Any] | None,
     written: dict[str, Any] | None,
     percentage: float,
@@ -323,12 +443,13 @@ def create_test_result(
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO test_results (id, test_id, submitted_at, mcq_json, written_json, percentage)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO test_results (id, test_id, owner_id, submitted_at, mcq_json, written_json, percentage)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result_id,
                 test_id,
+                owner_id,
                 submitted_at,
                 json.dumps(mcq) if mcq is not None else None,
                 json.dumps(written) if written is not None else None,
@@ -350,10 +471,66 @@ def test_result_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return item
 
 
-def list_test_results(limit: int = 25) -> list[dict[str, Any]]:
+def list_test_results(limit: int = 25, owner_id: str | None = None) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        if owner_id:
+            rows = conn.execute(
+                "SELECT * FROM test_results WHERE owner_id = ? ORDER BY submitted_at DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM test_results ORDER BY submitted_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [item for row in rows if (item := test_result_row_to_dict(row))]
+
+
+def create_study_session(
+    *,
+    owner_id: str,
+    topic: str,
+    include_diagram: bool,
+    document_ids: list[str],
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    session_id = uuid.uuid4().hex
+    created_at = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO study_sessions
+                (id, owner_id, topic, include_diagram, document_ids_json, response_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                owner_id,
+                topic,
+                1 if include_diagram else 0,
+                json.dumps(document_ids),
+                json.dumps(response),
+                created_at,
+            ),
+        )
+        row = conn.execute("SELECT * FROM study_sessions WHERE id = ?", (session_id,)).fetchone()
+        return study_session_row_to_dict(row) or {}
+
+
+def study_session_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    item["include_diagram"] = bool(item["include_diagram"])
+    item["document_ids"] = json.loads(item.pop("document_ids_json"))
+    item["response"] = json.loads(item.pop("response_json"))
+    return item
+
+
+def list_study_sessions(owner_id: str, limit: int = 25) -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM test_results ORDER BY submitted_at DESC LIMIT ?",
-            (limit,),
+            "SELECT * FROM study_sessions WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+            (owner_id, limit),
         ).fetchall()
-        return [item for row in rows if (item := test_result_row_to_dict(row))]
+        return [item for row in rows if (item := study_session_row_to_dict(row))]

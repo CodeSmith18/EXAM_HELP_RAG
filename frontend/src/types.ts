@@ -1,6 +1,19 @@
 export type TestMode = "mcq" | "written" | "mixed";
 export type Difficulty = "Easy" | "Medium" | "Hard";
 
+export interface UserOut {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: UserOut;
+}
+
 export interface DocumentOut {
   id: string;
   file_name: string;
@@ -110,6 +123,15 @@ export interface StudyModeResponse {
   quick_revision_summary: string;
   mermaid_diagram?: string | null;
   sources: SourceRef[];
+}
+
+export interface StudySessionOut {
+  id: string;
+  topic: string;
+  include_diagram: boolean;
+  document_ids: string[];
+  response: StudyModeResponse;
+  created_at: string;
 }
 
 export interface AskQuestionResponse {

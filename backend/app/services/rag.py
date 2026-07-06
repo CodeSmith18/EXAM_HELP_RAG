@@ -107,12 +107,13 @@ def keyword_chunks_to_results(chunks: list[dict]) -> list[tuple[Document, float]
 def fallback_chunks_to_results(
     *,
     document_ids: list[str] | None,
+    owner_id: str | None = None,
     limit: int,
 ) -> list[tuple[Document, float]]:
     allowed_ids = {document_id for document_id in (document_ids or []) if document_id}
     chunks = [
         chunk
-        for chunk in database.list_chunks()
+        for chunk in database.list_chunks(owner_id=owner_id)
         if not allowed_ids or chunk["document_id"] in allowed_ids
     ][:limit]
     return keyword_chunks_to_results(chunks)
@@ -175,13 +176,23 @@ def ensure_pdf_chunk(chunk: bytes, filename: str) -> None:
         raise HTTPException(status_code=400, detail=f"{filename} is not a valid PDF file.")
 
 
-def validate_ready_documents(document_ids: list[str] | None) -> None:
+def validate_ready_documents(document_ids: list[str] | None, owner_id: str | None = None) -> None:
     for document_id in document_ids or []:
-        document = database.get_document(document_id)
+        document = database.get_document(document_id, owner_id=owner_id)
         if not document:
             raise HTTPException(status_code=404, detail=f"Document {document_id} was not found.")
         if document["status"] != "ready":
             raise HTTPException(status_code=400, detail=f"{document['file_name']} is not ready for retrieval yet.")
+
+
+def resolve_retrieval_document_ids(document_ids: list[str] | None, owner_id: str | None = None) -> list[str] | None:
+    explicit_ids = [document_id for document_id in (document_ids or []) if document_id]
+    if explicit_ids:
+        validate_ready_documents(explicit_ids, owner_id=owner_id)
+        return explicit_ids
+    if owner_id:
+        return [document["id"] for document in database.list_documents(owner_id=owner_id) if document["status"] == "ready"]
+    return None
 
 
 def should_prioritize_keyword(query: str, keyword_chunks: list[dict]) -> bool:
@@ -223,14 +234,22 @@ def retrieve_context(
     *,
     k: int | None = None,
     document_ids: list[str] | None = None,
+    owner_id: str | None = None,
 ) -> tuple[str, list[SourceRef]]:
     settings = get_settings()
-    validate_ready_documents(document_ids)
+    retrieval_document_ids = resolve_retrieval_document_ids(document_ids, owner_id=owner_id)
+    if owner_id and not retrieval_document_ids:
+        return "", []
     limit = max(1, k or settings.retrieval_k)
-    keyword_chunks = database.search_chunks_by_keyword(query, document_ids=document_ids, limit=max(limit, 3))
+    keyword_chunks = database.search_chunks_by_keyword(
+        query,
+        document_ids=retrieval_document_ids,
+        owner_id=owner_id,
+        limit=max(limit, 3),
+    )
     keyword_results = keyword_chunks_to_results(keyword_chunks)
     try:
-        semantic_results = similarity_search(query, k=limit, document_ids=document_ids)
+        semantic_results = similarity_search(query, k=limit, document_ids=retrieval_document_ids)
     except Exception:
         semantic_results = []
 
@@ -241,11 +260,14 @@ def retrieve_context(
         limit=limit,
     )
     if not results:
-        results = cap_result_count(fallback_chunks_to_results(document_ids=document_ids, limit=limit), limit)
+        results = cap_result_count(
+            fallback_chunks_to_results(document_ids=retrieval_document_ids, owner_id=owner_id, limit=limit),
+            limit,
+        )
     return format_context(results)
 
 
-async def save_upload(file: UploadFile) -> tuple[str, Path]:
+async def save_upload(file: UploadFile, owner_id: str | None = None) -> tuple[str, Path]:
     settings = get_settings()
     safe_name = sanitize_upload_filename(file.filename or "")
     document_id = uuid.uuid4().hex
@@ -275,7 +297,7 @@ async def save_upload(file: UploadFile) -> tuple[str, Path]:
         stored_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"{safe_name} is empty.")
 
-    database.create_document(document_id, safe_name, stored_path)
+    database.create_document(document_id, safe_name, stored_path, owner_id=owner_id)
     return document_id, stored_path
 
 
@@ -315,8 +337,9 @@ async def ask_question(
     question: str,
     top_k: int,
     document_ids: list[str] | None = None,
+    owner_id: str | None = None,
 ) -> tuple[str, list[SourceRef]]:
-    context, sources = retrieve_context(question, k=top_k, document_ids=document_ids)
+    context, sources = retrieve_context(question, k=top_k, document_ids=document_ids, owner_id=owner_id)
     if not context:
         return "The answer was not found in the uploaded PDF.", []
     payload = await GroqClient().chat_json(
@@ -327,8 +350,13 @@ async def ask_question(
     return str(payload.get("answer", "The answer was not found in the uploaded PDF.")), sources
 
 
-async def study_topic(topic: str, include_diagram: bool, document_ids: list[str] | None = None) -> dict:
-    context, sources = retrieve_context(topic, document_ids=document_ids)
+async def study_topic(
+    topic: str,
+    include_diagram: bool,
+    document_ids: list[str] | None = None,
+    owner_id: str | None = None,
+) -> dict:
+    context, sources = retrieve_context(topic, document_ids=document_ids, owner_id=owner_id)
     if not context:
         return {
             "topic": topic,

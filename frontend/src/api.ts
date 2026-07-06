@@ -1,5 +1,6 @@
 import {
   AskQuestionResponse,
+  AuthResponse,
   DocumentOut,
   EvaluateWrittenResponse,
   GenerateTestRequest,
@@ -7,18 +8,39 @@ import {
   GeneratedQuestion,
   SavedTestResult,
   StudyModeResponse,
+  StudySessionOut,
   SubmitMcqResponse,
-  TestHistoryItem
+  TestHistoryItem,
+  UserOut
 } from "./types";
 
 const rawApiBase = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 const API_BASE = rawApiBase ? (rawApiBase.startsWith("http") ? rawApiBase : `https://${rawApiBase}`) : "";
+const AUTH_TOKEN_KEY = "examprep_auth_token";
+
+export function getAuthToken(): string {
+  return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+}
+
+export function setAuthToken(token: string) {
+  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken() {
+  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders(),
       ...(options.headers || {})
     }
   });
@@ -34,6 +56,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 
+export async function registerAccount(email: string, password: string, fullName?: string): Promise<AuthResponse> {
+  const response = await request<AuthResponse>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email, password, full_name: fullName || null })
+  });
+  setAuthToken(response.access_token);
+  return response;
+}
+
+export async function loginAccount(email: string, password: string): Promise<AuthResponse> {
+  const response = await request<AuthResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password })
+  });
+  setAuthToken(response.access_token);
+  return response;
+}
+
+export function getCurrentUser(): Promise<UserOut> {
+  return request<UserOut>("/auth/me");
+}
+
 export function uploadPdfs(files: File[], onProgress: (progress: number) => void): Promise<DocumentOut[]> {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
@@ -41,6 +85,10 @@ export function uploadPdfs(files: File[], onProgress: (progress: number) => void
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/upload-pdf`);
+    const token = getAuthToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         onProgress(Math.round((event.loaded / event.total) * 100));
@@ -139,6 +187,10 @@ export function studyMode(topic: string, includeDiagram: boolean, documentIds: s
     method: "POST",
     body: JSON.stringify({ topic, include_diagram: includeDiagram, document_ids: documentIds })
   });
+}
+
+export function listStudySessions(): Promise<StudySessionOut[]> {
+  return request<StudySessionOut[]>("/study-sessions");
 }
 
 export function askQuestion(question: string, documentIds: string[] = []): Promise<AskQuestionResponse> {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -11,6 +11,9 @@ from app.config import PROJECT_ROOT, get_settings
 from app.models import (
     AskQuestionRequest,
     AskQuestionResponse,
+    AuthLoginRequest,
+    AuthRegisterRequest,
+    AuthResponse,
     DocumentOut,
     EvaluateWrittenRequest,
     EvaluateWrittenResponse,
@@ -19,14 +22,17 @@ from app.models import (
     IngestRequest,
     SaveTestResultRequest,
     SavedTestResult,
+    StudySessionOut,
     StudyModeRequest,
     StudyModeResponse,
     SubmitMcqRequest,
     SubmitMcqResponse,
     TestHistoryItem,
     UploadResponse,
+    UserOut,
 )
 from app.services import rag
+from app.services.auth import get_current_user, login_user, register_user
 from app.services.test_service import (
     evaluate_written_test,
     generate_test,
@@ -60,13 +66,32 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/auth/register", response_model=AuthResponse)
+def register(request: AuthRegisterRequest) -> AuthResponse:
+    return register_user(request)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(request: AuthLoginRequest) -> AuthResponse:
+    return login_user(request)
+
+
+@app.get("/auth/me", response_model=UserOut)
+def auth_me(current_user: UserOut = Depends(get_current_user)) -> UserOut:
+    return current_user
+
+
 @app.post("/upload-pdf", response_model=UploadResponse)
-async def upload_pdf(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)) -> UploadResponse:
+async def upload_pdf(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    current_user: UserOut = Depends(get_current_user),
+) -> UploadResponse:
     rag.validate_upload_batch(files)
     documents: list[DocumentOut] = []
     for file in files:
-        document_id, _ = await rag.save_upload(file)
-        document = database.get_document(document_id)
+        document_id, _ = await rag.save_upload(file, owner_id=current_user.id)
+        document = database.get_document(document_id, owner_id=current_user.id)
         if document:
             documents.append(DocumentOut(**document))
         background_tasks.add_task(rag.ingest_document, document_id)
@@ -74,62 +99,82 @@ async def upload_pdf(background_tasks: BackgroundTasks, files: list[UploadFile] 
 
 
 @app.get("/documents", response_model=list[DocumentOut])
-def documents() -> list[DocumentOut]:
-    return [DocumentOut(**document) for document in database.list_documents()]
+def documents(current_user: UserOut = Depends(get_current_user)) -> list[DocumentOut]:
+    return [DocumentOut(**document) for document in database.list_documents(owner_id=current_user.id)]
 
 
 @app.post("/ingest-document", response_model=DocumentOut)
-def ingest_document(request: IngestRequest) -> DocumentOut:
+def ingest_document(request: IngestRequest, current_user: UserOut = Depends(get_current_user)) -> DocumentOut:
+    if not database.get_document(request.document_id, owner_id=current_user.id):
+        raise HTTPException(status_code=404, detail="Document not found.")
     document = rag.ingest_document(request.document_id)
     return DocumentOut(**document)
 
 
 @app.post("/generate-test", response_model=GenerateTestResponse)
-async def generate_test_endpoint(request: GenerateTestRequest) -> GenerateTestResponse:
-    response = await generate_test(request)
+async def generate_test_endpoint(request: GenerateTestRequest, current_user: UserOut = Depends(get_current_user)) -> GenerateTestResponse:
+    response = await generate_test(request, owner_id=current_user.id)
     if not response.questions:
         raise HTTPException(status_code=404, detail="No relevant content was found in the uploaded PDF.")
     return response
 
 
 @app.get("/tests", response_model=list[TestHistoryItem])
-def tests() -> list[TestHistoryItem]:
-    return list_saved_tests()
+def tests(current_user: UserOut = Depends(get_current_user)) -> list[TestHistoryItem]:
+    return list_saved_tests(owner_id=current_user.id)
 
 
 @app.get("/tests/{test_id}", response_model=GenerateTestResponse)
-def test_detail(test_id: str) -> GenerateTestResponse:
-    return get_saved_test(test_id)
+def test_detail(test_id: str, current_user: UserOut = Depends(get_current_user)) -> GenerateTestResponse:
+    return get_saved_test(test_id, owner_id=current_user.id)
 
 
 @app.post("/submit-mcq-test", response_model=SubmitMcqResponse)
-def submit_mcq_test(request: SubmitMcqRequest) -> SubmitMcqResponse:
+def submit_mcq_test(request: SubmitMcqRequest, current_user: UserOut = Depends(get_current_user)) -> SubmitMcqResponse:
     return score_mcq_test(request)
 
 
 @app.post("/evaluate-written-test", response_model=EvaluateWrittenResponse)
-async def evaluate_written_endpoint(request: EvaluateWrittenRequest) -> EvaluateWrittenResponse:
-    return await evaluate_written_test(request)
+async def evaluate_written_endpoint(
+    request: EvaluateWrittenRequest,
+    current_user: UserOut = Depends(get_current_user),
+) -> EvaluateWrittenResponse:
+    return await evaluate_written_test(request, owner_id=current_user.id)
 
 
 @app.post("/save-test-result", response_model=SavedTestResult)
-def save_test_result_endpoint(request: SaveTestResultRequest) -> SavedTestResult:
-    return save_test_result(request)
+def save_test_result_endpoint(request: SaveTestResultRequest, current_user: UserOut = Depends(get_current_user)) -> SavedTestResult:
+    return save_test_result(request, owner_id=current_user.id)
 
 
 @app.get("/test-results", response_model=list[SavedTestResult])
-def test_results() -> list[SavedTestResult]:
-    return list_saved_results()
+def test_results(current_user: UserOut = Depends(get_current_user)) -> list[SavedTestResult]:
+    return list_saved_results(owner_id=current_user.id)
 
 
 @app.post("/study-mode", response_model=StudyModeResponse)
-async def study_mode(request: StudyModeRequest) -> StudyModeResponse:
-    return StudyModeResponse(**await rag.study_topic(request.topic, request.include_diagram, request.document_ids))
+async def study_mode(request: StudyModeRequest, current_user: UserOut = Depends(get_current_user)) -> StudyModeResponse:
+    response = StudyModeResponse(
+        **await rag.study_topic(request.topic, request.include_diagram, request.document_ids, owner_id=current_user.id)
+    )
+    database.create_study_session(
+        owner_id=current_user.id,
+        topic=request.topic,
+        include_diagram=request.include_diagram,
+        document_ids=request.document_ids,
+        response=response.model_dump(mode="json"),
+    )
+    return response
+
+
+@app.get("/study-sessions", response_model=list[StudySessionOut])
+def study_sessions(current_user: UserOut = Depends(get_current_user)) -> list[StudySessionOut]:
+    return [StudySessionOut(**session) for session in database.list_study_sessions(owner_id=current_user.id)]
 
 
 @app.post("/ask-question", response_model=AskQuestionResponse)
-async def ask_question(request: AskQuestionRequest) -> AskQuestionResponse:
-    answer, sources = await rag.ask_question(request.question, request.top_k, request.document_ids)
+async def ask_question(request: AskQuestionRequest, current_user: UserOut = Depends(get_current_user)) -> AskQuestionResponse:
+    answer, sources = await rag.ask_question(request.question, request.top_k, request.document_ids, owner_id=current_user.id)
     return AskQuestionResponse(answer=answer, sources=sources)
 
 
