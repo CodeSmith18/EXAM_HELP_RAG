@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
@@ -8,7 +9,7 @@ from langchain_core.documents import Document
 
 from app import database
 from app.config import get_settings
-from app.models import SourceRef
+from app.models import LLMAnswerPayload, LLMStudyModePayload, SourceRef
 from app.prompts import GENERAL_QA_PROMPT, STUDY_MODE_PROMPT
 from app.services.groq_client import GroqClient
 from app.services.pdf_loader import extract_pdf_pages
@@ -36,6 +37,14 @@ DISTINCTIVE_STOP_WORDS = {
     "with",
     "your",
 }
+
+ALLOWED_PDF_CONTENT_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
+    "application/octet-stream",
+    "binary/octet-stream",
+}
+PDF_SIGNATURE = b"%PDF-"
 
 
 def source_from_metadata(metadata: dict, score: float | None = None) -> SourceRef:
@@ -95,24 +104,104 @@ def keyword_chunks_to_results(chunks: list[dict]) -> list[tuple[Document, float]
     ]
 
 
-def merge_results(
-    keyword_results: list[tuple[Document, float]],
-    semantic_results: list[tuple[Document, float]],
+def fallback_chunks_to_results(
     *,
+    document_ids: list[str] | None,
     limit: int,
 ) -> list[tuple[Document, float]]:
+    allowed_ids = {document_id for document_id in (document_ids or []) if document_id}
+    chunks = [
+        chunk
+        for chunk in database.list_chunks()
+        if not allowed_ids or chunk["document_id"] in allowed_ids
+    ][:limit]
+    return keyword_chunks_to_results(chunks)
+
+
+def merge_results(*result_groups: list[tuple[Document, float]], limit: int) -> list[tuple[Document, float]]:
     seen: set[str] = set()
     merged: list[tuple[Document, float]] = []
-    for doc, score in [*keyword_results, *semantic_results]:
-        chunk_id = str(doc.metadata.get("chunk_id", ""))
-        if chunk_id and chunk_id in seen:
-            continue
-        if chunk_id:
-            seen.add(chunk_id)
-        merged.append((doc, score))
-        if len(merged) >= limit:
-            break
+    for result_group in result_groups:
+        for doc, score in result_group:
+            chunk_id = str(doc.metadata.get("chunk_id", ""))
+            fallback_key = f"{doc.metadata.get('document_id', '')}:{doc.metadata.get('page_number', '')}:{doc.page_content[:80]}"
+            key = chunk_id or fallback_key
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append((doc, score))
+            if len(merged) >= limit:
+                return merged
     return merged
+
+
+def sanitize_upload_filename(filename: str) -> str:
+    safe_name = Path(filename).name.replace("\x00", "").strip()
+    safe_name = re.sub(r"\s+", " ", safe_name)
+    safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_", safe_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
+    if not safe_name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail=f"{safe_name} is not a PDF.")
+    return safe_name
+
+
+def validate_upload_batch(files: list[UploadFile]) -> None:
+    settings = get_settings()
+    if not files:
+        raise HTTPException(status_code=400, detail="Upload at least one PDF.")
+    if len(files) > settings.max_upload_files:
+        raise HTTPException(status_code=400, detail=f"Upload up to {settings.max_upload_files} PDFs at a time.")
+
+    seen_names: set[str] = set()
+    for file in files:
+        safe_name = sanitize_upload_filename(file.filename or "")
+        content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+        if content_type and content_type not in ALLOWED_PDF_CONTENT_TYPES:
+            raise HTTPException(status_code=400, detail=f"{safe_name} must be uploaded as a PDF.")
+        if safe_name.lower() in seen_names:
+            raise HTTPException(status_code=400, detail=f"{safe_name} was selected more than once.")
+        seen_names.add(safe_name.lower())
+
+        file_size = getattr(file, "size", None)
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail=f"{safe_name} is empty.")
+        if file_size and file_size > settings.max_upload_mb * 1024 * 1024:
+            raise HTTPException(status_code=400, detail=f"{safe_name} is larger than {settings.max_upload_mb} MB.")
+
+
+def ensure_pdf_chunk(chunk: bytes, filename: str) -> None:
+    if PDF_SIGNATURE not in chunk[:1024]:
+        raise HTTPException(status_code=400, detail=f"{filename} is not a valid PDF file.")
+
+
+def validate_ready_documents(document_ids: list[str] | None) -> None:
+    for document_id in document_ids or []:
+        document = database.get_document(document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail=f"Document {document_id} was not found.")
+        if document["status"] != "ready":
+            raise HTTPException(status_code=400, detail=f"{document['file_name']} is not ready for retrieval yet.")
+
+
+def should_prioritize_keyword(query: str, keyword_chunks: list[dict]) -> bool:
+    return has_distinctive_keyword_match(query, keyword_chunks)
+
+
+def cap_result_count(results: list[tuple[Document, float]], limit: int) -> list[tuple[Document, float]]:
+    return results[:limit]
+
+
+def keyword_or_semantic_results(
+    *,
+    keyword_results: list[tuple[Document, float]],
+    semantic_results: list[tuple[Document, float]],
+    keyword_first: bool,
+    limit: int,
+) -> list[tuple[Document, float]]:
+    if keyword_first:
+        return merge_results(keyword_results, semantic_results, limit=limit)
+    return merge_results(semantic_results, keyword_results, limit=limit)
 
 
 def has_distinctive_keyword_match(query: str, chunks: list[dict]) -> bool:
@@ -136,34 +225,56 @@ def retrieve_context(
     document_ids: list[str] | None = None,
 ) -> tuple[str, list[SourceRef]]:
     settings = get_settings()
-    limit = k or settings.retrieval_k
-    keyword_chunks = database.search_chunks_by_keyword(query, document_ids=document_ids, limit=max(3, limit // 2))
+    validate_ready_documents(document_ids)
+    limit = max(1, k or settings.retrieval_k)
+    keyword_chunks = database.search_chunks_by_keyword(query, document_ids=document_ids, limit=max(limit, 3))
     keyword_results = keyword_chunks_to_results(keyword_chunks)
-    if has_distinctive_keyword_match(query, keyword_chunks):
-        return format_context(keyword_results[:limit])
-
     try:
         semantic_results = similarity_search(query, k=limit, document_ids=document_ids)
     except Exception:
         semantic_results = []
-    results = merge_results(keyword_results, semantic_results, limit=limit)
+
+    results = keyword_or_semantic_results(
+        keyword_results=keyword_results,
+        semantic_results=semantic_results,
+        keyword_first=should_prioritize_keyword(query, keyword_chunks),
+        limit=limit,
+    )
+    if not results:
+        results = cap_result_count(fallback_chunks_to_results(document_ids=document_ids, limit=limit), limit)
     return format_context(results)
 
 
 async def save_upload(file: UploadFile) -> tuple[str, Path]:
     settings = get_settings()
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail=f"{file.filename or 'File'} is not a PDF.")
-
-    safe_name = Path(file.filename).name.replace("/", "_")
-    document_id = __import__("uuid").uuid4().hex
+    safe_name = sanitize_upload_filename(file.filename or "")
+    document_id = uuid.uuid4().hex
     stored_path = settings.upload_path / f"{document_id}_{safe_name}"
-    with stored_path.open("wb") as output:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            output.write(chunk)
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    bytes_written = 0
+    first_chunk = True
+
+    try:
+        with stored_path.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                if first_chunk:
+                    ensure_pdf_chunk(chunk, safe_name)
+                    first_chunk = False
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(status_code=400, detail=f"{safe_name} is larger than {settings.max_upload_mb} MB.")
+                output.write(chunk)
+    except HTTPException:
+        stored_path.unlink(missing_ok=True)
+        raise
+
+    if bytes_written == 0:
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"{safe_name} is empty.")
+
     database.create_document(document_id, safe_name, stored_path)
     return document_id, stored_path
 
@@ -211,6 +322,7 @@ async def ask_question(
     payload = await GroqClient().chat_json(
         GENERAL_QA_PROMPT.format(question=question, context=context),
         temperature=0.1,
+        schema_model=LLMAnswerPayload,
     )
     return str(payload.get("answer", "The answer was not found in the uploaded PDF.")), sources
 
@@ -231,6 +343,7 @@ async def study_topic(topic: str, include_diagram: bool, document_ids: list[str]
     payload = await GroqClient().chat_json(
         STUDY_MODE_PROMPT.format(topic=topic, context=context),
         temperature=0.2,
+        schema_model=LLMStudyModePayload,
     )
     if not include_diagram:
         payload["mermaid_diagram"] = None

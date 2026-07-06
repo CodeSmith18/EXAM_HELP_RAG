@@ -48,6 +48,16 @@ export interface GenerateTestResponse {
   sources: SourceRef[];
 }
 
+export interface TestHistoryItem {
+  test_id: string;
+  mode: TestMode;
+  difficulty: Difficulty;
+  topic?: string | null;
+  question_count: number;
+  created_at: string;
+  sources: SourceRef[];
+}
+
 export interface McqResultItem {
   question_id: string;
   question: string;
@@ -82,6 +92,15 @@ export interface EvaluateWrittenResponse {
   results: WrittenEvaluationItem[];
 }
 
+export interface SavedTestResult {
+  result_id: string;
+  test: GenerateTestResponse;
+  mcq?: SubmitMcqResponse | null;
+  written?: EvaluateWrittenResponse | null;
+  submitted_at: string;
+  percentage: number;
+}
+
 export interface StudyModeResponse {
   topic: string;
   simple_explanation: string;
@@ -99,8 +118,10 @@ export interface AskQuestionResponse {
 }
 
 export interface CombinedResults {
+  resultId?: string;
   test: GenerateTestResponse;
   mcq?: SubmitMcqResponse | null;
   written?: EvaluateWrittenResponse | null;
   submittedAt: string;
+  percentage?: number;
 }

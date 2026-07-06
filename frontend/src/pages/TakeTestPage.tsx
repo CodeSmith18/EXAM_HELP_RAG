@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { CheckCircle2, FileQuestion, Loader2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { evaluateWrittenTest, submitMcqTest } from "../api";
+import { evaluateWrittenTest, saveTestResult, submitMcqTest } from "../api";
 import { SourceList } from "../components/SourceList";
 import { CombinedResults, GeneratedQuestion, GenerateTestResponse } from "../types";
 
@@ -47,11 +47,14 @@ export function TakeTestPage({ test, onResults }: TakeTestPageProps) {
         mcqQuestions.length ? submitMcqTest(mcqQuestions, answers) : Promise.resolve(null),
         writtenQuestions.length ? evaluateWrittenTest(writtenQuestions, answers) : Promise.resolve(null)
       ]);
+      const saved = await saveTestResult(test, mcq, written);
       onResults({
-        test,
-        mcq,
-        written,
-        submittedAt: new Date().toISOString()
+        resultId: saved.result_id,
+        test: saved.test,
+        mcq: saved.mcq,
+        written: saved.written,
+        submittedAt: saved.submitted_at,
+        percentage: saved.percentage
       });
       navigate("/results");
     } catch (err) {

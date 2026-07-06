@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,35 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS generated_tests (
+                id TEXT PRIMARY KEY,
+                mode TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                topic TEXT,
+                document_ids_json TEXT NOT NULL,
+                questions_json TEXT NOT NULL,
+                sources_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_tests_created_at ON generated_tests(created_at)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS test_results (
+                id TEXT PRIMARY KEY,
+                test_id TEXT NOT NULL,
+                submitted_at TEXT NOT NULL,
+                mcq_json TEXT,
+                written_json TEXT,
+                percentage REAL NOT NULL DEFAULT 0,
+                FOREIGN KEY (test_id) REFERENCES generated_tests(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_submitted_at ON test_results(submitted_at)")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -221,3 +251,109 @@ def search_chunks_by_keyword(
             scored_chunks.append(item)
 
     return sorted(scored_chunks, key=lambda item: item["keyword_score"], reverse=True)[:limit]
+
+
+def save_generated_test(
+    *,
+    test_id: str,
+    mode: str,
+    difficulty: str,
+    topic: str | None,
+    document_ids: list[str],
+    questions: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    created_at = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO generated_tests
+                (id, mode, difficulty, topic, document_ids_json, questions_json, sources_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                test_id,
+                mode,
+                difficulty,
+                topic,
+                json.dumps(document_ids),
+                json.dumps(questions),
+                json.dumps(sources),
+                created_at,
+            ),
+        )
+        row = conn.execute("SELECT * FROM generated_tests WHERE id = ?", (test_id,)).fetchone()
+        return generated_test_row_to_dict(row) or {}
+
+
+def generated_test_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    item["document_ids"] = json.loads(item.pop("document_ids_json"))
+    item["questions"] = json.loads(item.pop("questions_json"))
+    item["sources"] = json.loads(item.pop("sources_json"))
+    return item
+
+
+def get_generated_test(test_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM generated_tests WHERE id = ?", (test_id,)).fetchone()
+        return generated_test_row_to_dict(row)
+
+
+def list_generated_tests(limit: int = 25) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM generated_tests ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [item for row in rows if (item := generated_test_row_to_dict(row))]
+
+
+def create_test_result(
+    *,
+    test_id: str,
+    mcq: dict[str, Any] | None,
+    written: dict[str, Any] | None,
+    percentage: float,
+) -> dict[str, Any]:
+    result_id = uuid.uuid4().hex
+    submitted_at = utc_now()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO test_results (id, test_id, submitted_at, mcq_json, written_json, percentage)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                result_id,
+                test_id,
+                submitted_at,
+                json.dumps(mcq) if mcq is not None else None,
+                json.dumps(written) if written is not None else None,
+                percentage,
+            ),
+        )
+        row = conn.execute("SELECT * FROM test_results WHERE id = ?", (result_id,)).fetchone()
+        return test_result_row_to_dict(row) or {}
+
+
+def test_result_row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    item = dict(row)
+    mcq_json = item.pop("mcq_json")
+    written_json = item.pop("written_json")
+    item["mcq"] = json.loads(mcq_json) if mcq_json else None
+    item["written"] = json.loads(written_json) if written_json else None
+    return item
+
+
+def list_test_results(limit: int = 25) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM test_results ORDER BY submitted_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [item for row in rows if (item := test_result_row_to_dict(row))]

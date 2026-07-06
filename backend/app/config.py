@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     chunk_size: int = 900
     chunk_overlap: int = 125
     retrieval_k: int = 6
+    max_upload_mb: int = 25
+    max_upload_files: int = 5
     frontend_origin: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")

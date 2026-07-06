@@ -6,6 +6,9 @@ import { DocumentOut } from "../types";
 
 const POLL_DELAY_MS = 2000;
 const MAX_POLL_ATTEMPTS = 90;
+const MAX_UPLOAD_MB = 25;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const PDF_TYPES = new Set(["application/pdf", "application/x-pdf", "application/octet-stream", ""]);
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -20,9 +23,36 @@ export function UploadPage() {
   const [error, setError] = useState("");
 
   function handleFiles(event: ChangeEvent<HTMLInputElement>) {
-    setFiles(Array.from(event.target.files || []));
+    const selectedFiles = Array.from(event.target.files || []);
+    const seenNames = new Set<string>();
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    selectedFiles.forEach((file) => {
+      const lowerName = file.name.toLowerCase();
+      if (!lowerName.endsWith(".pdf") || !PDF_TYPES.has(file.type)) {
+        errors.push(`${file.name} is not a PDF.`);
+        return;
+      }
+      if (file.size === 0) {
+        errors.push(`${file.name} is empty.`);
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        errors.push(`${file.name} is larger than ${MAX_UPLOAD_MB} MB.`);
+        return;
+      }
+      if (seenNames.has(lowerName)) {
+        errors.push(`${file.name} was selected more than once.`);
+        return;
+      }
+      seenNames.add(lowerName);
+      validFiles.push(file);
+    });
+
+    setFiles(validFiles);
     setUploaded([]);
-    setError("");
+    setError(errors.join(" "));
     setProgress(0);
     setIngesting(false);
   }
@@ -84,7 +114,8 @@ export function UploadPage() {
               <UploadCloud size={24} aria-hidden="true" />
             </span>
             <span className="text-sm font-bold text-ink">Select PDF files</span>
-            <input type="file" multiple accept="application/pdf" className="sr-only" onChange={handleFiles} />
+            <span className="text-xs font-medium text-slate-500">Up to {MAX_UPLOAD_MB} MB each</span>
+            <input type="file" multiple accept="application/pdf,.pdf" className="sr-only" onChange={handleFiles} />
           </label>
         </div>
 

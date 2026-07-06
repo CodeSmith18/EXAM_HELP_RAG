@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import uuid
 
+from fastapi import HTTPException
+
+from app import database
 from app.models import (
     EvaluateWrittenRequest,
     EvaluateWrittenResponse,
     GeneratedQuestion,
     GenerateTestRequest,
     GenerateTestResponse,
+    LLMQuestionsPayload,
+    LLMWrittenEvaluationPayload,
     McqResultItem,
+    SaveTestResultRequest,
+    SavedTestResult,
     SourceRef,
     SubmitMcqRequest,
     SubmitMcqResponse,
+    TestHistoryItem,
     WrittenEvaluationItem,
 )
 from app.prompts import MCQ_GENERATION_PROMPT, MIXED_TEST_PROMPT, WRITTEN_EVALUATION_PROMPT, WRITTEN_QUESTION_PROMPT
@@ -58,10 +66,12 @@ def normalize_generated_questions(raw_questions: list[dict], sources: list[Sourc
     for index, item in enumerate(raw_questions, start=1):
         q_type = item.get("type", "mcq")
         if q_type not in {"mcq", "written"}:
-            q_type = "mcq" if item.get("options") else "written"
+            continue
         options = item.get("options") or []
         if q_type == "mcq":
             options = [str(option) for option in options][:4]
+            if len(options) != 4 or item.get("correct_answer") not in options:
+                continue
         else:
             options = []
         normalized.append(
@@ -78,6 +88,92 @@ def normalize_generated_questions(raw_questions: list[dict], sources: list[Sourc
             )
         )
     return [question for question in normalized if question.question]
+
+
+def serialize_test(response: GenerateTestResponse, document_ids: list[str]) -> None:
+    database.save_generated_test(
+        test_id=response.test_id,
+        mode=response.mode,
+        difficulty=response.difficulty,
+        topic=response.topic,
+        document_ids=document_ids,
+        questions=[question.model_dump(mode="json") for question in response.questions],
+        sources=[source.model_dump(mode="json") for source in response.sources],
+    )
+
+
+def saved_test_to_response(saved: dict) -> GenerateTestResponse:
+    return GenerateTestResponse(
+        test_id=saved["id"],
+        mode=saved["mode"],
+        difficulty=saved["difficulty"],
+        topic=saved.get("topic"),
+        questions=[GeneratedQuestion(**question) for question in saved["questions"]],
+        sources=[SourceRef(**source) for source in saved["sources"]],
+    )
+
+
+def saved_test_to_history_item(saved: dict) -> TestHistoryItem:
+    return TestHistoryItem(
+        test_id=saved["id"],
+        mode=saved["mode"],
+        difficulty=saved["difficulty"],
+        topic=saved.get("topic"),
+        question_count=len(saved["questions"]),
+        created_at=saved["created_at"],
+        sources=[SourceRef(**source) for source in saved["sources"]],
+    )
+
+
+def list_saved_tests(limit: int = 25) -> list[TestHistoryItem]:
+    return [saved_test_to_history_item(saved) for saved in database.list_generated_tests(limit=limit)]
+
+
+def get_saved_test(test_id: str) -> GenerateTestResponse:
+    saved = database.get_generated_test(test_id)
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved test not found.")
+    return saved_test_to_response(saved)
+
+
+def combined_percentage(mcq: SubmitMcqResponse | None, written: EvaluateWrittenResponse | None) -> float:
+    earned = 0.0
+    possible = 0.0
+    if mcq is not None:
+        earned += mcq.score
+        possible += mcq.total
+    if written is not None:
+        earned += written.score
+        possible += written.max_score
+    return round((earned / possible) * 100, 2) if possible else 0.0
+
+
+def saved_result_to_response(saved_result: dict) -> SavedTestResult:
+    test = get_saved_test(saved_result["test_id"])
+    return SavedTestResult(
+        result_id=saved_result["id"],
+        test=test,
+        mcq=SubmitMcqResponse(**saved_result["mcq"]) if saved_result.get("mcq") else None,
+        written=EvaluateWrittenResponse(**saved_result["written"]) if saved_result.get("written") else None,
+        submitted_at=saved_result["submitted_at"],
+        percentage=float(saved_result["percentage"]),
+    )
+
+
+def save_test_result(request: SaveTestResultRequest) -> SavedTestResult:
+    if not database.get_generated_test(request.test.test_id):
+        serialize_test(request.test, [])
+    saved = database.create_test_result(
+        test_id=request.test.test_id,
+        mcq=request.mcq.model_dump(mode="json") if request.mcq else None,
+        written=request.written.model_dump(mode="json") if request.written else None,
+        percentage=combined_percentage(request.mcq, request.written),
+    )
+    return saved_result_to_response(saved)
+
+
+def list_saved_results(limit: int = 25) -> list[SavedTestResult]:
+    return [saved_result_to_response(saved) for saved in database.list_test_results(limit=limit)]
 
 
 async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
@@ -99,9 +195,13 @@ async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
             questions=[],
             sources=[],
         )
-    payload = await GroqClient().chat_json(prompt_for_mode(request, context), temperature=0.2)
+    payload = await GroqClient().chat_json(
+        prompt_for_mode(request, context),
+        temperature=0.2,
+        schema_model=LLMQuestionsPayload,
+    )
     questions = normalize_generated_questions(payload.get("questions", []), sources)
-    return GenerateTestResponse(
+    response = GenerateTestResponse(
         test_id=str(uuid.uuid4()),
         mode=request.mode,
         difficulty=request.difficulty,
@@ -109,6 +209,9 @@ async def generate_test(request: GenerateTestRequest) -> GenerateTestResponse:
         questions=questions,
         sources=sources,
     )
+    if questions:
+        serialize_test(response, request.document_ids)
+    return response
 
 
 def score_mcq_test(request: SubmitMcqRequest) -> SubmitMcqResponse:
@@ -171,6 +274,7 @@ async def evaluate_written_test(request: EvaluateWrittenRequest) -> EvaluateWrit
                 context=context,
             ),
             temperature=0.1,
+            schema_model=LLMWrittenEvaluationPayload,
         )
         raw_score = payload.get("score", 0)
         try:

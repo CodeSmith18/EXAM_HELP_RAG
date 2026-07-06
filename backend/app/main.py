@@ -17,14 +17,25 @@ from app.models import (
     GenerateTestRequest,
     GenerateTestResponse,
     IngestRequest,
+    SaveTestResultRequest,
+    SavedTestResult,
     StudyModeRequest,
     StudyModeResponse,
     SubmitMcqRequest,
     SubmitMcqResponse,
+    TestHistoryItem,
     UploadResponse,
 )
 from app.services import rag
-from app.services.test_service import evaluate_written_test, generate_test, score_mcq_test
+from app.services.test_service import (
+    evaluate_written_test,
+    generate_test,
+    get_saved_test,
+    list_saved_results,
+    list_saved_tests,
+    save_test_result,
+    score_mcq_test,
+)
 
 
 app = FastAPI(title="ExamPrep RAG API", version="1.0.0")
@@ -51,6 +62,7 @@ def health() -> dict[str, str]:
 
 @app.post("/upload-pdf", response_model=UploadResponse)
 async def upload_pdf(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)) -> UploadResponse:
+    rag.validate_upload_batch(files)
     documents: list[DocumentOut] = []
     for file in files:
         document_id, _ = await rag.save_upload(file)
@@ -80,6 +92,16 @@ async def generate_test_endpoint(request: GenerateTestRequest) -> GenerateTestRe
     return response
 
 
+@app.get("/tests", response_model=list[TestHistoryItem])
+def tests() -> list[TestHistoryItem]:
+    return list_saved_tests()
+
+
+@app.get("/tests/{test_id}", response_model=GenerateTestResponse)
+def test_detail(test_id: str) -> GenerateTestResponse:
+    return get_saved_test(test_id)
+
+
 @app.post("/submit-mcq-test", response_model=SubmitMcqResponse)
 def submit_mcq_test(request: SubmitMcqRequest) -> SubmitMcqResponse:
     return score_mcq_test(request)
@@ -88,6 +110,16 @@ def submit_mcq_test(request: SubmitMcqRequest) -> SubmitMcqResponse:
 @app.post("/evaluate-written-test", response_model=EvaluateWrittenResponse)
 async def evaluate_written_endpoint(request: EvaluateWrittenRequest) -> EvaluateWrittenResponse:
     return await evaluate_written_test(request)
+
+
+@app.post("/save-test-result", response_model=SavedTestResult)
+def save_test_result_endpoint(request: SaveTestResultRequest) -> SavedTestResult:
+    return save_test_result(request)
+
+
+@app.get("/test-results", response_model=list[SavedTestResult])
+def test_results() -> list[SavedTestResult]:
+    return list_saved_results()
 
 
 @app.post("/study-mode", response_model=StudyModeResponse)

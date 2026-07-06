@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 TestMode = Literal["mcq", "written", "mixed"]
@@ -64,6 +64,49 @@ class GenerateTestResponse(BaseModel):
     sources: list[SourceRef]
 
 
+class TestHistoryItem(BaseModel):
+    test_id: str
+    mode: TestMode
+    difficulty: Difficulty
+    topic: Optional[str] = None
+    question_count: int
+    created_at: str
+    sources: list[SourceRef] = Field(default_factory=list)
+
+
+class LLMGeneratedQuestion(BaseModel):
+    type: Literal["mcq", "written"] = "mcq"
+    question: str = Field(min_length=1)
+    options: list[str] = Field(default_factory=list)
+    correct_answer: Optional[str] = None
+    explanation: Optional[str] = None
+    model_answer: Optional[str] = None
+    rubric: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_question_shape(self) -> "LLMGeneratedQuestion":
+        self.question = self.question.strip()
+        if self.type == "mcq":
+            self.options = [str(option).strip() for option in self.options if str(option).strip()]
+            if len(self.options) != 4:
+                raise ValueError("MCQ questions must include exactly 4 options.")
+            if self.correct_answer not in self.options:
+                raise ValueError("MCQ correct_answer must exactly match one option.")
+            return self
+
+        self.options = []
+        self.rubric = [str(point).strip() for point in self.rubric if str(point).strip()]
+        if not (self.model_answer or "").strip():
+            raise ValueError("Written questions must include a model_answer.")
+        if not self.rubric:
+            raise ValueError("Written questions must include a rubric.")
+        return self
+
+
+class LLMQuestionsPayload(BaseModel):
+    questions: list[LLMGeneratedQuestion] = Field(default_factory=list)
+
+
 class McqAnswer(BaseModel):
     question_id: str
     selected_answer: str
@@ -118,6 +161,28 @@ class EvaluateWrittenResponse(BaseModel):
     results: list[WrittenEvaluationItem]
 
 
+class LLMWrittenEvaluationPayload(BaseModel):
+    score: float
+    feedback: str
+    model_answer: str
+    rubric_breakdown: dict[str, Any] = Field(default_factory=dict)
+
+
+class SaveTestResultRequest(BaseModel):
+    test: GenerateTestResponse
+    mcq: Optional[SubmitMcqResponse] = None
+    written: Optional[EvaluateWrittenResponse] = None
+
+
+class SavedTestResult(BaseModel):
+    result_id: str
+    test: GenerateTestResponse
+    mcq: Optional[SubmitMcqResponse] = None
+    written: Optional[EvaluateWrittenResponse] = None
+    submitted_at: str
+    percentage: float
+
+
 class StudyModeRequest(BaseModel):
     topic: str
     include_diagram: bool = True
@@ -135,6 +200,15 @@ class StudyModeResponse(BaseModel):
     sources: list[SourceRef]
 
 
+class LLMStudyModePayload(BaseModel):
+    simple_explanation: str
+    key_points: list[str] = Field(default_factory=list)
+    example: Optional[str] = None
+    important_terms: list[dict[str, str]] = Field(default_factory=list)
+    quick_revision_summary: str
+    mermaid_diagram: Optional[str] = None
+
+
 class AskQuestionRequest(BaseModel):
     question: str
     top_k: int = Field(default=6, ge=1, le=12)
@@ -144,3 +218,7 @@ class AskQuestionRequest(BaseModel):
 class AskQuestionResponse(BaseModel):
     answer: str
     sources: list[SourceRef]
+
+
+class LLMAnswerPayload(BaseModel):
+    answer: str

@@ -5,8 +5,10 @@ import {
   GenerateTestRequest,
   GenerateTestResponse,
   GeneratedQuestion,
+  SavedTestResult,
   StudyModeResponse,
-  SubmitMcqResponse
+  SubmitMcqResponse,
+  TestHistoryItem
 } from "./types";
 
 const rawApiBase = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
@@ -83,6 +85,14 @@ export function generateTest(payload: GenerateTestRequest): Promise<GenerateTest
   });
 }
 
+export function listTests(): Promise<TestHistoryItem[]> {
+  return request<TestHistoryItem[]>("/tests");
+}
+
+export function getTest(testId: string): Promise<GenerateTestResponse> {
+  return request<GenerateTestResponse>(`/tests/${testId}`);
+}
+
 export function submitMcqTest(
   questions: GeneratedQuestion[],
   answers: Record<string, string>
@@ -107,6 +117,21 @@ export function evaluateWrittenTest(
       answers: Object.entries(answers).map(([question_id, answer]) => ({ question_id, answer }))
     })
   });
+}
+
+export function saveTestResult(
+  test: GenerateTestResponse,
+  mcq: SubmitMcqResponse | null,
+  written: EvaluateWrittenResponse | null
+): Promise<SavedTestResult> {
+  return request<SavedTestResult>("/save-test-result", {
+    method: "POST",
+    body: JSON.stringify({ test, mcq, written })
+  });
+}
+
+export function listTestResults(): Promise<SavedTestResult[]> {
+  return request<SavedTestResult[]>("/test-results");
 }
 
 export function studyMode(topic: string, includeDiagram: boolean, documentIds: string[] = []): Promise<StudyModeResponse> {
