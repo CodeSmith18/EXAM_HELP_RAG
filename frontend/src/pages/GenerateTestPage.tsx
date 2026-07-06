@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { FileQuestion, Loader2, RefreshCw } from "lucide-react";
+import { FileQuestion, History, Loader2, Play, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { generateTest, listDocuments } from "../api";
-import { Difficulty, DocumentOut, GenerateTestResponse, TestMode } from "../types";
+import { generateTest, getTest, listDocuments, listTests } from "../api";
+import { Difficulty, DocumentOut, GenerateTestResponse, TestHistoryItem, TestMode } from "../types";
 
 interface GenerateTestPageProps {
   onGenerated: (test: GenerateTestResponse) => void;
@@ -18,8 +18,11 @@ export function GenerateTestPage({ onGenerated }: GenerateTestPageProps) {
   const [numQuestions, setNumQuestions] = useState(5);
   const [topic, setTopic] = useState("");
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
+  const [savedTests, setSavedTests] = useState<TestHistoryItem[]>([]);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [loadingTests, setLoadingTests] = useState(true);
+  const [busyTestId, setBusyTestId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -37,8 +40,20 @@ export function GenerateTestPage({ onGenerated }: GenerateTestPageProps) {
     }
   }
 
+  async function loadTests() {
+    setLoadingTests(true);
+    try {
+      setSavedTests(await listTests());
+    } catch {
+      setSavedTests([]);
+    } finally {
+      setLoadingTests(false);
+    }
+  }
+
   useEffect(() => {
     loadDocuments();
+    loadTests();
   }, []);
 
   function toggleDocument(documentId: string) {
@@ -59,6 +74,7 @@ export function GenerateTestPage({ onGenerated }: GenerateTestPageProps) {
         topic: topic.trim() || null,
         document_ids: selectedDocumentIds
       });
+      await loadTests();
       onGenerated(test);
       navigate("/take-test");
     } catch (err) {
@@ -68,8 +84,22 @@ export function GenerateTestPage({ onGenerated }: GenerateTestPageProps) {
     }
   }
 
+  async function handleOpenSavedTest(testId: string) {
+    setBusyTestId(testId);
+    setError("");
+    try {
+      const test = await getTest(testId);
+      onGenerated(test);
+      navigate("/take-test");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open saved test.");
+    } finally {
+      setBusyTestId("");
+    }
+  }
+
   return (
-    <section className="mx-auto max-w-3xl">
+    <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[1fr_320px]">
       <form onSubmit={handleSubmit} className="card p-5">
         <div className="mb-5 flex items-center gap-3">
           <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg bg-indigo/10 text-indigo">
@@ -201,6 +231,48 @@ export function GenerateTestPage({ onGenerated }: GenerateTestPageProps) {
           Generate
         </button>
       </form>
-    </section>
+
+      <aside className="card h-fit p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <History size={18} className="text-slate-500" aria-hidden="true" />
+          <h3 className="text-lg font-bold text-ink">Saved Tests</h3>
+        </div>
+        {loadingTests ? (
+          <p className="flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            Loading
+          </p>
+        ) : savedTests.length ? (
+          <div className="grid gap-2">
+            {savedTests.slice(0, 8).map((test) => (
+              <button
+                key={test.test_id}
+                type="button"
+                className="rounded-lg border border-line bg-white px-3 py-2 text-left transition hover:bg-slate-50"
+                onClick={() => handleOpenSavedTest(test.test_id)}
+                disabled={Boolean(busyTestId)}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-sm font-bold capitalize text-ink">
+                    {test.mode} - {test.difficulty}
+                  </span>
+                  {busyTestId === test.test_id ? (
+                    <Loader2 size={15} className="shrink-0 animate-spin text-slate-400" aria-hidden="true" />
+                  ) : (
+                    <Play size={15} className="shrink-0 text-slate-400" aria-hidden="true" />
+                  )}
+                </span>
+                <span className="mt-1 block text-xs text-slate-500">
+                  {test.question_count} questions - {new Date(test.created_at).toLocaleDateString()}
+                </span>
+                {test.topic ? <span className="mt-1 block truncate text-xs text-slate-500">{test.topic}</span> : null}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Generated tests appear here.</p>
+        )}
+      </aside>
+    </div>
   );
 }

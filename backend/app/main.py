@@ -103,6 +103,16 @@ def documents(current_user: UserOut = Depends(get_current_user)) -> list[Documen
     return [DocumentOut(**document) for document in database.list_documents(owner_id=current_user.id)]
 
 
+@app.delete("/documents/{document_id}", response_model=DocumentOut)
+def delete_document(document_id: str, current_user: UserOut = Depends(get_current_user)) -> DocumentOut:
+    document = database.delete_document(document_id, owner_id=current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    Path(document["stored_path"]).unlink(missing_ok=True)
+    rag.rebuild_vector_store()
+    return DocumentOut(**document)
+
+
 @app.post("/ingest-document", response_model=DocumentOut)
 def ingest_document(request: IngestRequest, current_user: UserOut = Depends(get_current_user)) -> DocumentOut:
     if not database.get_document(request.document_id, owner_id=current_user.id):
@@ -170,6 +180,21 @@ async def study_mode(request: StudyModeRequest, current_user: UserOut = Depends(
 @app.get("/study-sessions", response_model=list[StudySessionOut])
 def study_sessions(current_user: UserOut = Depends(get_current_user)) -> list[StudySessionOut]:
     return [StudySessionOut(**session) for session in database.list_study_sessions(owner_id=current_user.id)]
+
+
+@app.get("/study-sessions/{session_id}", response_model=StudySessionOut)
+def study_session_detail(session_id: str, current_user: UserOut = Depends(get_current_user)) -> StudySessionOut:
+    session = database.get_study_session(session_id, owner_id=current_user.id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Study session not found.")
+    return StudySessionOut(**session)
+
+
+@app.delete("/study-sessions/{session_id}")
+def delete_study_session(session_id: str, current_user: UserOut = Depends(get_current_user)) -> dict[str, bool]:
+    if not database.delete_study_session(session_id, owner_id=current_user.id):
+        raise HTTPException(status_code=404, detail="Study session not found.")
+    return {"deleted": True}
 
 
 @app.post("/ask-question", response_model=AskQuestionResponse)

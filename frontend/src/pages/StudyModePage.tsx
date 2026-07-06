@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { BookOpen, History, Loader2, MessageSquareText, RefreshCw, Search } from "lucide-react";
-import { askQuestion, listDocuments, listStudySessions, studyMode } from "../api";
+import { BookOpen, History, Loader2, MessageSquareText, RefreshCw, Search, Trash2 } from "lucide-react";
+import { askQuestion, deleteStudySession, listDocuments, listStudySessions, studyMode } from "../api";
 import { MermaidBlock } from "../components/MermaidBlock";
 import { SourceList } from "../components/SourceList";
 import { AskQuestionResponse, DocumentOut, StudyModeResponse, StudySessionOut } from "../types";
@@ -87,6 +87,15 @@ export function StudyModePage() {
       setError(err instanceof Error ? err.message : "Could not answer the question.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDeleteSession(sessionId: string) {
+    try {
+      await deleteStudySession(sessionId);
+      setStudySessions((current) => current.filter((session) => session.id !== sessionId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete study session.");
     }
   }
 
@@ -221,18 +230,22 @@ export function StudyModePage() {
             </div>
             <div className="grid gap-2">
               {studySessions.slice(0, 5).map((session) => (
-                <button
-                  key={session.id}
-                  type="button"
-                  className="rounded-lg border border-line bg-white px-3 py-2 text-left transition hover:bg-slate-50"
-                  onClick={() => {
-                    setStudy(session.response);
-                    setAnswer(null);
-                  }}
-                >
-                  <span className="block truncate text-sm font-bold text-ink">{session.topic}</span>
-                  <span className="block text-xs text-slate-500">{new Date(session.created_at).toLocaleString()}</span>
-                </button>
+                <div key={session.id} className="flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => {
+                      setStudy(session.response);
+                      setAnswer(null);
+                    }}
+                  >
+                    <span className="block truncate text-sm font-bold text-ink">{session.topic}</span>
+                    <span className="block text-xs text-slate-500">{new Date(session.created_at).toLocaleString()}</span>
+                  </button>
+                  <button type="button" className="btn-icon h-9 w-9" title="Delete session" onClick={() => handleDeleteSession(session.id)}>
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
+                </div>
               ))}
             </div>
           </div>

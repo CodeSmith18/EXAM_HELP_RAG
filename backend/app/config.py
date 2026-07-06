@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
     @property
+    def is_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite:///") or "://" not in self.database_url
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.database_url.startswith(("postgresql://", "postgresql+psycopg2://", "postgres://"))
+
+    @property
     def database_path(self) -> Path:
         if self.database_url.startswith("sqlite:///"):
             return resolve_project_path(self.database_url.replace("sqlite:///", "", 1))
@@ -64,7 +72,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    if settings.is_sqlite:
+        settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     settings.vector_path.mkdir(parents=True, exist_ok=True)
     settings.upload_path.mkdir(parents=True, exist_ok=True)
     return settings

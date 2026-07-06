@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
-import { listDocuments, reingestDocument } from "../api";
+import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { deleteDocument, listDocuments, reingestDocument } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { DocumentOut } from "../types";
 
@@ -34,6 +34,22 @@ export function DocumentsPage() {
       setDocuments((current) => current.map((doc) => (doc.id === updated.id ? updated : doc)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not re-ingest document.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function handleDelete(document: DocumentOut) {
+    if (!window.confirm(`Delete ${document.file_name}?`)) {
+      return;
+    }
+    setBusyId(document.id);
+    setError("");
+    try {
+      await deleteDocument(document.id);
+      setDocuments((current) => current.filter((doc) => doc.id !== document.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete document.");
     } finally {
       setBusyId("");
     }
@@ -86,10 +102,15 @@ export function DocumentsPage() {
                     <StatusPill status={doc.status} />
                   </td>
                   <td className="py-4 text-right">
-                    <button className="btn-secondary" onClick={() => handleReingest(doc.id)} disabled={busyId === doc.id}>
-                      {busyId === doc.id ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
-                      Re-ingest
-                    </button>
+                    <div className="flex justify-end gap-2">
+                      <button className="btn-secondary" onClick={() => handleReingest(doc.id)} disabled={busyId === doc.id}>
+                        {busyId === doc.id ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <RefreshCw size={16} aria-hidden="true" />}
+                        Re-ingest
+                      </button>
+                      <button className="btn-icon" title="Delete document" onClick={() => handleDelete(doc)} disabled={busyId === doc.id}>
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -102,4 +123,3 @@ export function DocumentsPage() {
     </section>
   );
 }
-

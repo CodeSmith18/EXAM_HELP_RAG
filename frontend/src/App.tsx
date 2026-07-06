@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { clearAuthToken, getAuthToken, getCurrentUser } from "./api";
+import { AUTH_REQUIRED_EVENT, clearAuthToken, getAuthToken, getCurrentUser } from "./api";
 import { AppShell } from "./components/AppShell";
 import { AuthPage } from "./pages/AuthPage";
 import { Dashboard } from "./pages/Dashboard";
@@ -31,6 +31,17 @@ export default function App() {
         setUser(null);
       })
       .finally(() => setAuthLoading(false));
+  }, []);
+
+  useEffect(() => {
+    function handleAuthRequired() {
+      setUser(null);
+      setCurrentTest(null);
+      setResults(null);
+    }
+
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
   }, []);
 
   function handleLogout() {

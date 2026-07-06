@@ -7,7 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from app.config import get_settings
 
@@ -40,12 +40,73 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class QueryResult:
+    def __init__(self, cursor: Any) -> None:
+        self.cursor = cursor
+
+    def fetchone(self) -> Any:
+        return self.cursor.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        return list(self.cursor.fetchall())
+
+
+class DatabaseConnection:
+    def __init__(self, raw_connection: Any, dialect: str) -> None:
+        self.raw_connection = raw_connection
+        self.dialect = dialect
+
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> QueryResult:
+        cursor = self.raw_connection.cursor()
+        cursor.execute(self._prepare_sql(sql), tuple(params))
+        return QueryResult(cursor)
+
+    def executemany(self, sql: str, params: Iterable[Sequence[Any]]) -> QueryResult:
+        cursor = self.raw_connection.cursor()
+        cursor.executemany(self._prepare_sql(sql), [tuple(item) for item in params])
+        return QueryResult(cursor)
+
+    def commit(self) -> None:
+        self.raw_connection.commit()
+
+    def close(self) -> None:
+        self.raw_connection.close()
+
+    def _prepare_sql(self, sql: str) -> str:
+        if self.dialect == "postgres":
+            return sql.replace("?", "%s")
+        return sql
+
+
+def normalize_postgres_url(database_url: str) -> str:
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql://", 1)
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    return database_url
+
+
+def open_database_connection() -> DatabaseConnection:
+    settings = get_settings()
+    if settings.is_postgres:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+        except ImportError as exc:
+            raise RuntimeError("Install psycopg2-binary to use a PostgreSQL DATABASE_URL.") from exc
+
+        raw = psycopg2.connect(normalize_postgres_url(settings.database_url), cursor_factory=RealDictCursor)
+        return DatabaseConnection(raw, "postgres")
+
+    raw = sqlite3.connect(settings.database_path)
+    raw.row_factory = sqlite3.Row
+    raw.execute("PRAGMA foreign_keys = ON")
+    return DatabaseConnection(raw, "sqlite")
+
+
 @contextmanager
 def get_connection():
-    db_path = get_settings().database_path
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = open_database_connection()
     try:
         yield conn
         conn.commit()
@@ -154,7 +215,19 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_owner_id ON test_results(owner_id)")
 
 
-def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
+def ensure_column(conn: DatabaseConnection, table_name: str, column_name: str, column_type: str) -> None:
+    if conn.dialect == "postgres":
+        row = conn.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            (table_name, column_name),
+        ).fetchone()
+        if not row:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+        return
+
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
     if column_name not in columns:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
@@ -256,6 +329,16 @@ def get_document(document_id: str, owner_id: str | None = None) -> dict[str, Any
         else:
             row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         return row_to_dict(row)
+
+
+def delete_document(document_id: str, owner_id: str) -> dict[str, Any] | None:
+    document = get_document(document_id, owner_id=owner_id)
+    if not document:
+        return None
+    with get_connection() as conn:
+        conn.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+        conn.execute("DELETE FROM documents WHERE id = ? AND owner_id = ?", (document_id, owner_id))
+    return document
 
 
 def replace_chunks(document_id: str, chunks: Iterable[dict[str, Any]]) -> None:
@@ -534,3 +617,20 @@ def list_study_sessions(owner_id: str, limit: int = 25) -> list[dict[str, Any]]:
             (owner_id, limit),
         ).fetchall()
         return [item for row in rows if (item := study_session_row_to_dict(row))]
+
+
+def get_study_session(session_id: str, owner_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM study_sessions WHERE id = ? AND owner_id = ?",
+            (session_id, owner_id),
+        ).fetchone()
+        return study_session_row_to_dict(row)
+
+
+def delete_study_session(session_id: str, owner_id: str) -> bool:
+    if not get_study_session(session_id, owner_id):
+        return False
+    with get_connection() as conn:
+        conn.execute("DELETE FROM study_sessions WHERE id = ? AND owner_id = ?", (session_id, owner_id))
+    return True

@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: examprep-rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: examprep
+      POSTGRES_USER: examprep
+      POSTGRES_PASSWORD: examprep_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U examprep -d examprep"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

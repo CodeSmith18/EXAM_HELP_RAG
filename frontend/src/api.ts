@@ -17,6 +17,7 @@ import {
 const rawApiBase = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 const API_BASE = rawApiBase ? (rawApiBase.startsWith("http") ? rawApiBase : `https://${rawApiBase}`) : "";
 const AUTH_TOKEN_KEY = "examprep_auth_token";
+export const AUTH_REQUIRED_EVENT = "examprep-auth-required";
 
 export function getAuthToken(): string {
   return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
@@ -28,6 +29,11 @@ export function setAuthToken(token: string) {
 
 export function clearAuthToken() {
   window.localStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+function handleUnauthorized() {
+  clearAuthToken();
+  window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
 }
 
 function authHeaders(): Record<string, string> {
@@ -45,6 +51,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   });
   if (!response.ok) {
+    if (response.status === 401) {
+      handleUnauthorized();
+    }
     const text = await response.text();
     try {
       const data = JSON.parse(text);
@@ -102,6 +111,9 @@ export function uploadPdfs(files: File[], onProgress: (progress: number) => void
           reject(new Error("Upload completed but the response could not be read."));
         }
       } else {
+        if (xhr.status === 401) {
+          handleUnauthorized();
+        }
         try {
           const data = JSON.parse(xhr.responseText);
           reject(new Error(data.detail || xhr.responseText));
@@ -123,6 +135,12 @@ export function reingestDocument(documentId: string): Promise<DocumentOut> {
   return request<DocumentOut>("/ingest-document", {
     method: "POST",
     body: JSON.stringify({ document_id: documentId })
+  });
+}
+
+export function deleteDocument(documentId: string): Promise<DocumentOut> {
+  return request<DocumentOut>(`/documents/${documentId}`, {
+    method: "DELETE"
   });
 }
 
@@ -191,6 +209,16 @@ export function studyMode(topic: string, includeDiagram: boolean, documentIds: s
 
 export function listStudySessions(): Promise<StudySessionOut[]> {
   return request<StudySessionOut[]>("/study-sessions");
+}
+
+export function getStudySession(sessionId: string): Promise<StudySessionOut> {
+  return request<StudySessionOut>(`/study-sessions/${sessionId}`);
+}
+
+export function deleteStudySession(sessionId: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/study-sessions/${sessionId}`, {
+    method: "DELETE"
+  });
 }
 
 export function askQuestion(question: string, documentIds: string[] = []): Promise<AskQuestionResponse> {

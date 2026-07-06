@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import json
 import secrets
-import sqlite3
 import time
 from typing import Any, Optional
 
@@ -103,14 +102,13 @@ def auth_response(user: dict[str, Any]) -> AuthResponse:
 
 def register_user(request: AuthRegisterRequest) -> AuthResponse:
     email = normalize_email(request.email)
-    try:
-        user = database.create_user(
-            email=email,
-            password_hash=hash_password(request.password),
-            full_name=request.full_name.strip() if request.full_name else None,
-        )
-    except sqlite3.IntegrityError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account already exists for this email.") from exc
+    if database.get_user_by_email(email):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account already exists for this email.")
+    user = database.create_user(
+        email=email,
+        password_hash=hash_password(request.password),
+        full_name=request.full_name.strip() if request.full_name else None,
+    )
     return auth_response(user)
 
 
