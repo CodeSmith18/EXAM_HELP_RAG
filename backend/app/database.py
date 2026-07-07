@@ -441,6 +441,23 @@ def search_chunks_by_keyword(
     return sorted(scored_chunks, key=lambda item: item["keyword_score"], reverse=True)[:limit]
 
 
+def generated_test_upsert_sql() -> str:
+    return """
+            INSERT INTO generated_tests
+                (id, owner_id, mode, difficulty, topic, document_ids_json, questions_json, sources_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                mode = excluded.mode,
+                difficulty = excluded.difficulty,
+                topic = excluded.topic,
+                document_ids_json = excluded.document_ids_json,
+                questions_json = excluded.questions_json,
+                sources_json = excluded.sources_json,
+                created_at = excluded.created_at
+            """
+
+
 def save_generated_test(
     *,
     test_id: str,
@@ -455,11 +472,7 @@ def save_generated_test(
     created_at = utc_now()
     with get_connection() as conn:
         conn.execute(
-            """
-            INSERT OR REPLACE INTO generated_tests
-                (id, owner_id, mode, difficulty, topic, document_ids_json, questions_json, sources_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            generated_test_upsert_sql(),
             (
                 test_id,
                 owner_id,
