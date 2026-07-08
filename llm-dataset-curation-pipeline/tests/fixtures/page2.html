@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Foundation Model Dataset Curation Notes</title>
+  </head>
+  <body>
+    <article>
+      <h1>Foundation Model Dataset Curation Notes</h1>
+      <p>
+        Dataset curation for foundation models is the practical process of converting messy raw sources into training
+        records that are useful, traceable, and safe to inspect. A curator checks whether text has enough signal,
+        whether the source is known, whether the language is expected, and whether the content repeats material that is
+        already present in the corpus. This work matters because large language models learn patterns from the data they
+        receive. Clean data improves reliability, while noisy records can waste training budget and reduce downstream
+        quality. Good curation includes extraction, normalization, quality filtering, metadata enrichment, and careful
+        deduplication before the dataset is released.
+      </p>
+      <p>
+        A strong curation pipeline records provenance. Each document should keep the source URL, fetch timestamp, license
+        information, language, word count, content hash, and processing version. These fields help researchers debug model
+        behavior, audit dataset changes, and reproduce a release. The pipeline can export JSONL for training systems and
+        Parquet for analytics. It should also create a quality report that explains how many pages were fetched, how many
+        records were removed, and why they were removed.
+      </p>
+    </article>
+  </body>
+</html>
+

@@ -1,0 +1,15 @@
+project_name: llm_dataset_curation_demo
+allowed_domains:
+  - en.wikipedia.org
+seed_urls:
+  - https://en.wikipedia.org/wiki/Large_language_model
+  - https://en.wikipedia.org/wiki/Machine_learning
+  - https://en.wikipedia.org/wiki/Natural_language_processing
+max_pages: 30
+max_depth: 1
+request_delay_seconds: 1
+language_allowlist:
+  - en
+license: CC BY-SA
+source_type: public_web
+

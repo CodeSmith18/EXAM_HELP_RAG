@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-dataset-curation-pipeline"
+version = "0.1.0"
+description = "Portfolio-grade pipeline for curating public web pages into LLM-ready JSONL and Parquet datasets."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "pandas>=2.1",
+  "pyarrow>=14",
+  "datasets>=2.18",
+  "pydantic>=2.7",
+  "PyYAML>=6.0",
+  "langdetect>=1.0.9",
+  "datasketch>=1.6",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+ui = [
+  "streamlit>=1.36",
+]
+
+[project.scripts]
+curate-web = "curation_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
